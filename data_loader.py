@@ -1,3 +1,4 @@
+from pickletools import uint8
 import re
 from socket import TIPC_DEST_DROPPABLE
 from face import FaceCube
@@ -66,26 +67,44 @@ def NOPLoader(train_rate=0.9, batch_size=32):
             for i in range(0, len(item[MOVE]), 2):
                 moves.append(int(char2move(item[MOVE][i:i+2])))
             targets.append(torch.tensor(moves))
-        targets = pad_sequence(targets, batch_first=True, padding_value=9)
+        targets = pad_sequence(targets, batch_first=True, padding_value=-100)
         return inputs, targets 
 
     data = R222ShortestAll()
-    train_dataloader = DataLoader(data[:int(len(data)*train_rate)],
+    train_dataloader = DataLoader(data[1:int(len(data)*train_rate)],
                                   batch_size=batch_size,
                                   shuffle=True,
                                   collate_fn=collate_fn)
-    test_dataloader = DataLoader(data[int(len(data)*(1-train_rate)):],
+    test_dataloader = DataLoader(data[int(len(data)*train_rate):],
                                  batch_size=batch_size,
                                  shuffle=False,
                                  collate_fn=collate_fn)
     return train_dataloader, test_dataloader
 
+def face_str2int(face_str):
+    ret = []
+    for c in face_str:
+        if c == 'U':
+            ret.append(0)
+        elif c == 'R':
+            ret.append(1)
+        elif c == 'F':
+            ret.append(2)
+        elif c == 'D':
+            ret.append(3)
+        elif c == 'L':
+            ret.append(4)
+        elif c == 'B':
+            ret.append(5)
+        else:
+            raise ValueError("Invalid face char: {}".format(c))
+    return ret
+
 def StateLoader(train_rate=0.9, batch_size=32):
     def collate_fn(batch):
         FACE = 0
         MOVE = 1
-
-        inputs = [item[FACE] for item in batch]
+        inputs = [face_str2int(item[FACE]) for item in batch]
         targets = []
         for item in batch:
             faces = []
@@ -99,24 +118,23 @@ def StateLoader(train_rate=0.9, batch_size=32):
                 raise ValueError("Error in cubie cube")
             co_cube = CoordCube(cc)
             for i in range(0, len(item[MOVE]), 2):
-                print(char2move(item[MOVE][i:i+2]))
-                # co_cube.move(char2move(item[MOVE][i:i+2]))
                 m = char2move(item[MOVE][i:i+2])
                 co_cube.corntwist = mv.corntwist_move[N_MOVE * co_cube.corntwist + m]
                 co_cube.cornperm = mv.cornperm_move[N_MOVE * co_cube.cornperm + m]
                 cc = cubie.CubieCube()
                 cc.set_corners(co_cube.cornperm)
                 cc.set_cornertwist(co_cube.corntwist)
-                faces.append(cc.to_facelet_cube().to_string())
-            targets.append(faces)
-        return inputs, targets
+                faces.append(face_str2int(cc.to_facelet_cube().to_string()))
+            targets.append(torch.tensor(faces))
+        targets = pad_sequence(targets, batch_first=True, padding_value=-100)
+        return torch.tensor(inputs, dtype=torch.float) / 6., targets.clone().detach().to(torch.float) / 6.
 
     data = R222ShortestAll()
-    train_dataloader = DataLoader(data[:int(len(data)*train_rate)],
+    train_dataloader = DataLoader(data[1:int(len(data)*train_rate)],
                                   batch_size=batch_size,
                                   shuffle=True,
                                   collate_fn=collate_fn)
-    test_dataloader = DataLoader(data[int(len(data)*(1-train_rate)):],
+    test_dataloader = DataLoader(data[int(len(data)*train_rate):],
                                  batch_size=batch_size,
                                  shuffle=False,
                                  collate_fn=collate_fn)
@@ -138,6 +156,7 @@ if __name__ == '__main__':
         print(len(i[1]))
         print(i[1])
         break
+
     train_dataloader, test_dataloader = StateLoader()
     for i in train_dataloader:
         print(len(i))
