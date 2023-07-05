@@ -34,14 +34,10 @@ class RubiksSolver(torch.nn.Module):
     def forward(self, src: torch.Tensor, tgt: torch.Tensor) -> torch.Tensor:
         src = self.initial_embedding(src)
         src = self.pos_encoder_src(src)
-        """"
-        embed_tgt = torch.zeros(tgt.shape[0], tgt.shape[1], self.d_model)
-        for i in range(tgt.shape[0]):
-            embed_tgt[i] = self.initial_embedding(tgt[i])
-        embed_tgt = self.pos_encoder_tgt(embed_tgt)
-        """
         embed_tgt = self.initial_embedding(tgt)
-        out = self.transformer(src, embed_tgt)
+        tgt_key_padding_mask = (tgt == -100).all(dim=-1)
+        tgt_key_padding_mask = tgt_key_padding_mask.permute(1, 0)
+        out = self.transformer(src, embed_tgt, tgt_key_padding_mask=tgt_key_padding_mask)
         out = self.final_deembedding(out)
         return out
 
@@ -94,7 +90,6 @@ if __name__=="__main__":
     src = torch.rand(1, 32, 24)
     tgt = torch.rand(11, 32, 24)
     out = model(src, tgt)
-    print(out.shape)
     from data_loader import StateLoader
     train_data_loader, test_data_loader = StateLoader(train_rate=0.998, batch_size=1024)
     train(model.cuda(), train_data_loader, test_data_loader)
