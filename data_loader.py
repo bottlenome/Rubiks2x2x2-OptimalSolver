@@ -127,7 +127,7 @@ def StateLoader(train_rate=0.9, batch_size=32):
                 faces.append(face_str2int(cc.to_facelet_cube().to_string()))
             targets.append(torch.tensor(faces))
         targets = pad_sequence(targets, batch_first=True, padding_value=-100)
-        return torch.tensor(inputs, dtype=torch.float) / 6., targets.clone().detach().to(torch.float) / 6.
+        return torch.tensor(inputs, dtype=torch.float), targets.clone().detach().to(torch.float)
 
     data = R222ShortestAll()
     train_dataloader = DataLoader(data[1:int(len(data)*train_rate)],

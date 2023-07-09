@@ -43,7 +43,7 @@ class RubiksSolver(torch.nn.Module):
 
 def train(model, train_data_loader, test_data_loader, n_epochs=100):
     loss_fn = torch.nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters())
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
     writer = SummaryWriter()
 
     with tqdm.tqdm(range(n_epochs)) as epoch_pbar:
