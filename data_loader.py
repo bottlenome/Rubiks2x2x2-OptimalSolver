@@ -26,8 +26,10 @@ class RubicDataset(Dataset):
             return self.transform(self.data[idx])
         return self.data[idx]
 
-def R222ShortestAll(transform=None):
+def R222ShortestAll(transform=None, size=None):
     data = pkl.load(open('R222ShortestAll.pkl', 'rb'))
+    if size is not None:
+        data = data[:size]
     return RubicDataset(data, transform=transform)
 
 def char2move(char):
@@ -54,7 +56,7 @@ def char2move(char):
 
 
 
-def NOPLoader(train_rate=0.9, batch_size=32):
+def NOPLoader(train_rate=0.9, batch_size=32, size=None):
     def collate_fn(batch):
         FACE = 0
         MOVE = 1
@@ -70,7 +72,7 @@ def NOPLoader(train_rate=0.9, batch_size=32):
         targets = pad_sequence(targets, batch_first=True, padding_value=0)
         return torch.tensor(inputs), targets 
 
-    data = R222ShortestAll()
+    data = R222ShortestAll(size=size)
     train_dataloader = DataLoader(data[1:int(len(data)*train_rate)],
                                   batch_size=batch_size,
                                   shuffle=True,
@@ -100,7 +102,7 @@ def face_str2int(face_str):
             raise ValueError("Invalid face char: {}".format(c))
     return ret
 
-def StateLoader(train_rate=0.9, batch_size=32):
+def StateLoader(train_rate=0.9, batch_size=32, size=None):
     def collate_fn(batch):
         FACE = 0
         MOVE = 1
@@ -129,7 +131,7 @@ def StateLoader(train_rate=0.9, batch_size=32):
         targets = pad_sequence(targets, batch_first=True, padding_value=0)
         return torch.tensor(inputs), targets
 
-    data = R222ShortestAll()
+    data = R222ShortestAll(size=size)
     train_dataloader = DataLoader(data[1:int(len(data)*train_rate)],
                                   batch_size=batch_size,
                                   shuffle=True,
@@ -142,6 +144,8 @@ def StateLoader(train_rate=0.9, batch_size=32):
 
 if __name__ == '__main__':
     data = R222ShortestAll()
+    print("data size", len(data))
+    data = R222ShortestAll(size=100000)
     print("data size", len(data))
     print("example data[0]", data[0])
     train_dataloader = DataLoader(data[:3000000], batch_size=4, shuffle=True)
