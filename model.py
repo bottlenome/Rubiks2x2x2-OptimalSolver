@@ -137,5 +137,5 @@ if __name__=="__main__":
 
     model = RubiksSolver()
     from data_loader import StateLoader
-    train_data_loader, test_data_loader = StateLoader(train_rate=0.8, batch_size=32)
+    train_data_loader, test_data_loader = StateLoader(train_rate=0.8, batch_size=32, size=50000)
     train(model.cuda(), train_data_loader, test_data_loader)
