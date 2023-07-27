@@ -1,0 +1,26 @@
+batch, face, embedding
+32, 24, 512
+
+batch, seq, face, embedding
+32, 11, 24, 512
+
+seq, batch, face, embedding
+10, 32, 24, 512
+
+ideal pe
+10, 1, 24, 512
+
+src
+1, 32, 24, 512
+
+real pe
+   1, 1, 512
+
+max_len, dmodel
+500, 1, 512
+
+24, 512
+
+500, 512
+500, 256: -> sin
+500, :256 -> cos

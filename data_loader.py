@@ -109,7 +109,7 @@ def StateLoader(train_rate=0.9, batch_size=32, size=None):
         inputs = [face_str2int(item[FACE]) for item in batch]
         targets = []
         for item in batch:
-            faces = []
+            faces = [[0] * 24]
             fc = FaceCube()
             s = fc.from_string(item[FACE])
             if s is not True:
