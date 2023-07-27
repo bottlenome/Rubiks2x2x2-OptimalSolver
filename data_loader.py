@@ -59,16 +59,16 @@ def NOPLoader(train_rate=0.9, batch_size=32):
         FACE = 0
         MOVE = 1
 
-        inputs = [item[FACE] + "\0" for item in batch]
+        inputs = [face_str2int(item[FACE]) + [0] for item in batch]
         targets = []
 
         for item in batch:
             moves = []
             for i in range(0, len(item[MOVE]), 2):
-                moves.append(int(char2move(item[MOVE][i:i+2])))
+                moves.append(int(char2move(item[MOVE][i:i+2]) + 1 + 6))
             targets.append(torch.tensor(moves))
-        targets = pad_sequence(targets, batch_first=True, padding_value=-100)
-        return inputs, targets 
+        targets = pad_sequence(targets, batch_first=True, padding_value=0)
+        return torch.tensor(inputs), targets 
 
     data = R222ShortestAll()
     train_dataloader = DataLoader(data[1:int(len(data)*train_rate)],
@@ -85,17 +85,17 @@ def face_str2int(face_str):
     ret = []
     for c in face_str:
         if c == 'U':
-            ret.append(0)
-        elif c == 'R':
             ret.append(1)
-        elif c == 'F':
+        elif c == 'R':
             ret.append(2)
-        elif c == 'D':
+        elif c == 'F':
             ret.append(3)
-        elif c == 'L':
+        elif c == 'D':
             ret.append(4)
-        elif c == 'B':
+        elif c == 'L':
             ret.append(5)
+        elif c == 'B':
+            ret.append(6)
         else:
             raise ValueError("Invalid face char: {}".format(c))
     return ret
@@ -126,8 +126,8 @@ def StateLoader(train_rate=0.9, batch_size=32):
                 cc.set_cornertwist(co_cube.corntwist)
                 faces.append(face_str2int(cc.to_facelet_cube().to_string()))
             targets.append(torch.tensor(faces))
-        targets = pad_sequence(targets, batch_first=True, padding_value=-100)
-        return torch.tensor(inputs, dtype=torch.float), targets.clone().detach().to(torch.float)
+        targets = pad_sequence(targets, batch_first=True, padding_value=0)
+        return torch.tensor(inputs), targets
 
     data = R222ShortestAll()
     train_dataloader = DataLoader(data[1:int(len(data)*train_rate)],
@@ -142,25 +142,29 @@ def StateLoader(train_rate=0.9, batch_size=32):
 
 if __name__ == '__main__':
     data = R222ShortestAll()
-    print(len(data))
-    print(data[0])
+    print("data size", len(data))
+    print("example data[0]", data[0])
     train_dataloader = DataLoader(data[:3000000], batch_size=4, shuffle=True)
     for i in train_dataloader:
-        print(len(i))
+        print("batch_size", len(i))
         print(i[0])
         break
+    print("NOPLoader")
     train_dataloader, test_dataloader = NOPLoader()
     for i in train_dataloader:
-        print(len(i))
-        print(i[0])
-        print(len(i[1]))
-        print(i[1])
+        print("src, tgt", len(i))
+        print("src.shape", i[0].shape)
+        print("tgt.shape", i[1].shape)
+        print("src[0]", i[0][0])
+        print("tgt[0]", i[1][0])
         break
 
-    train_dataloader, test_dataloader = StateLoader()
+    print("StateLoader")
+    train_dataloader, test_dataloader = StateLoader(batch_size=10)
     for i in train_dataloader:
-        print(len(i))
-        print(i[0])
-        print(len(i[1]))
-        print(i[1])
+        print("src, tgt", len(i))
+        print("src.shape", i[0].shape)
+        print("tgt.shape", i[1].shape)
+        print("src[0]", i[0][0])
+        print("tgt[0]", i[1][0])
         break
