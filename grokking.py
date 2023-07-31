@@ -4,6 +4,7 @@ import math
 import torch
 import torch.nn as nn
 from torch.nn import Transformer, Embedding
+from torch.nn import TransformerEncoder, TransformerEncoderLayer
 
 
 def gen_train_test(frac_train, num, seed=0):
@@ -53,9 +54,25 @@ class SimpleFormer(nn.Module):
         out = self.unembed(out)
         return out
 
+class GPT(nn.Module):
+    def __init__(self, d_vocab, d_model=128, nhead=4, num_layers=6, dropout=0.0):
+        super().__init__()
+        self.embed = torch.nn.Embedding(d_vocab + 1, d_model)
+        self.pos_encoder = PositionalEncoding(d_model, dropout)
+        encoder_layer = TransformerEncoderLayer(d_model, nhead, dim_feedforward=d_model*4, dropout=dropout)
+        self.transformer_encoder = TransformerEncoder(encoder_layer, num_layers, norm=None)
+        self.unembed = torch.nn.Linear(d_model, d_vocab)
+
+    def forward(self, src: torch.Tensor) -> torch.Tensor:
+        src = self.embed(src)
+        src = self.pos_encoder(src)
+        out = self.transformer_encoder(src)
+        out = self.unembed(out)
+        return out
+
 
 def main():
-    frac_train = 0.5
+    frac_train = 0.3 # default 0.3
     p = 113
     seed = 0
 
@@ -63,9 +80,12 @@ def main():
     train_result = [[p, (i+j)%p] for i, j, _ in train]
     test_result =  [[p, (i+j)%p] for i, j, _ in test]
 
-    model = SimpleFormer(p, d_model=128, nhead=8, num_encoder_layers=1, num_decoder_layers=3, dropout=0.00)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=0.01)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.95)
+    # model = SimpleFormer(p, d_model=128, nhead=8, num_encoder_layers=1, num_decoder_layers=3, dropout=0.00)
+    # default d_model=128, nhead=4, num_layers=1, d__mlp=n_layers * 4
+    model = GPT(p, d_model=128, nhead=4, num_layers=1, dropout=0.00)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1.0, betas=(0.9, 0.98))
+    # scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: min(step/10, 1))
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.1)
     train = torch.tensor(train)
     train_result = torch.tensor(train_result)
     test = torch.tensor(test)
@@ -88,26 +108,30 @@ def main():
         for epoch in p_bar:
             model.train()
             optimizer.zero_grad()
-            ret = model(train.t(), train_result.t())
-            ret = ret[0]
-            loss_val = loss(ret, train_result[:, 1].view(-1))
+            # ret = model(train.t(), train_result.t())
+            ret = model(train.t())
+            # ret = ret[0]
+            ret = ret[-1, :, :]
+            # loss_val = loss(ret, train_result[:, 1].view(-1))
+            loss_val = loss(ret, train_result[:, 1])
             loss_val.backward()
             optimizer.step()
             p_bar.set_description(f"Epoch {epoch + 1}/{n_epochs}, loss={loss_val.item():.4f}")
             writer.add_scalar('Loss/train', loss_val.item(), epoch)
-            writer.add_scalar('Accuracy/train', (ret.argmax(dim=-1) == train_result[:, 1].view(-1)).sum() / len(train_result), epoch)
+            writer.add_scalar('Accuracy/train', (ret.argmax(dim=-1) == train_result[:, 1]).sum() / len(train_result), epoch)
             with torch.no_grad():
                 model.eval()
-                ret = model(test.t(), test_result[:,0].view(-1, 1).t())
-                ret = ret.permute(1, 0, 2).view(-1, p)
-                loss_val = loss(ret, test_result[:, 1].view(-1))
+                # ret = model(test.t(), test_result[:,0].view(-1, 1).t())
+                ret = model(test.t())
+                # ret = ret.permute(1, 0, 2).view(-1, p)
+                ret = ret[-1, :, :]
+                loss_val = loss(ret, test_result[:, 1])
                 writer.add_scalar('Loss/test', loss_val.item(), epoch)
-                test_target = (ret.argmax(dim=-1) == test_result[:, 1].view(-1))
                 for i in range(len(test_result)):
                     print('Test', f'({test[i, 0]} + {test[i, 1]}) % {p} = {ret[i].argmax(dim=-1)} == {test_result[i, 1]}', epoch)
                     if i >= 10:
                         break
-                writer.add_scalar('Accuracy/test', (ret.argmax(dim=-1) == test_result[:, 1].view(-1)).sum() / len(test_result), epoch)
+                writer.add_scalar('Accuracy/test', (ret.argmax(dim=-1) == test_result[:, 1]).sum() / len(test_result), epoch)
             if epoch % save_interval == 0:
                 save_dict = {
                     'model': model.state_dict(),
@@ -129,4 +153,7 @@ def main():
     torch.save(save_dict, f"save/results_{epoch}.pth")
 
 if __name__ == '__main__':
+    model = GPT(123, d_model=128, nhead=8, num_layers=3, dropout=0.00)
+    input = torch.zeros(3, 6284).long()
+    model(input)
     main()
