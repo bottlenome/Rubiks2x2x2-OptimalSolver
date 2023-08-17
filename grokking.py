@@ -71,6 +71,73 @@ class GPT(nn.Module):
         return out
 
 
+class AccelNet(nn.Module):
+    def __init__(self, d_vocab, d_model=128, dropout=0.0):
+        super().__init__()
+        self.embed = torch.nn.Embedding(d_vocab + 1, d_model)
+        self.pos_encoder = PositionalEncoding(d_model, dropout)
+        self.dropout = nn.Dropout(p=dropout)
+        self.vector_layer = torch.nn.Linear(d_model, d_model)
+        self.accel_layer = torch.nn.Linear(d_model, d_model)
+        self.unembed = torch.nn.Linear(d_model, d_vocab)
+
+    def forward(self, src: torch.Tensor) -> torch.Tensor:
+        src = self.embed(src)
+        src = self.pos_encoder(src)
+        src = src.transpose(0, 1)
+        x = src
+        v = self.vector_layer(x)
+        a = self.accel_layer(x)
+        out = self.unembed(self.dropout(x + v + a))
+        out = out.transpose(0, 1)
+        return out
+
+class LieNet(nn.Module):
+    def __init__(self, d_model=128, n_head=4):
+        super().__init__()
+        self.map = nn.Linear(d_model, d_model)
+        self.relu = nn.ReLU()
+        self.blacket_product = nn.Linear(d_model*2, d_model)
+
+    def forward(self, src):
+        context = torch.zeros_like(src[0])
+        ret = []
+        src = self.relu(self.map(src))
+
+        def blacket(a, b):
+            return self.relu(self.blacket_product(torch.cat([a, b], dim = 1)))
+
+        for i in range(src.shape[0] - 1):
+            tmp = blacket(src[i], src[i + 1])
+            context += src[i] + tmp
+            if i == 0:
+                a = src[i]
+                b = src[i + 1]
+                c = src[i + 2]
+                jacobi_identity = (blacket(a, blacket(b, c)) +
+                                   blacket(b, blacket(c, a)) +
+                                   blacket(c, blacket(a, b)))
+                context += jacobi_identity
+            ret.append(context)
+        return torch.stack(ret)
+
+
+class LieClassify(nn.Module):
+    def __init__(self, d_vocab, d_model=128, dropout=0.0):
+        super().__init__()
+        self.embed = torch.nn.Embedding(d_vocab + 1, d_model)
+        self.pos_encoder = PositionalEncoding(d_model, dropout)
+        self.map = LieNet()
+        self.unembed = torch.nn.Linear(d_model, d_vocab)
+
+    def forward(self, src):
+        src = self.embed(src)
+        src = self.pos_encoder(src)
+        out = self.map(src)
+        out = self.unembed(out)
+        return out
+
+
 def main():
     frac_train = 0.3 # default 0.3
     p = 113
@@ -82,7 +149,9 @@ def main():
 
     # model = SimpleFormer(p, d_model=128, nhead=8, num_encoder_layers=1, num_decoder_layers=3, dropout=0.00)
     # default d_model=128, nhead=4, num_layers=1, d__mlp=n_layers * 4
-    model = GPT(p, d_model=128, nhead=4, num_layers=1, dropout=0.00)
+    # model = GPT(p, d_model=128, nhead=4, num_layers=3, dropout=0.00)
+    # model = AccelNet(p, d_model=128, dropout=0.1)
+    model = LieClassify(p, d_model=128, dropout=0.1)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1.0, betas=(0.9, 0.98))
     # scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: min(step/10, 1))
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.1)
