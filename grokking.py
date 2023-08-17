@@ -80,14 +80,15 @@ class AccelNet(nn.Module):
         self.vector_layer = torch.nn.Linear(d_model, d_model)
         self.accel_layer = torch.nn.Linear(d_model, d_model)
         self.unembed = torch.nn.Linear(d_model, d_vocab)
+        self.relu = nn.ReLU()
 
     def forward(self, src: torch.Tensor) -> torch.Tensor:
         src = self.embed(src)
         src = self.pos_encoder(src)
         src = src.transpose(0, 1)
         x = src
-        v = self.vector_layer(x)
-        a = self.accel_layer(x)
+        v = self.relu(self.vector_layer(x))
+        a = self.relu(self.accel_layer(x))
         out = self.unembed(self.dropout(x + v + a))
         out = out.transpose(0, 1)
         return out
@@ -150,8 +151,8 @@ def main():
     # model = SimpleFormer(p, d_model=128, nhead=8, num_encoder_layers=1, num_decoder_layers=3, dropout=0.00)
     # default d_model=128, nhead=4, num_layers=1, d__mlp=n_layers * 4
     # model = GPT(p, d_model=128, nhead=4, num_layers=3, dropout=0.00)
-    # model = AccelNet(p, d_model=128, dropout=0.1)
-    model = LieClassify(p, d_model=128, dropout=0.1)
+    model = AccelNet(p, d_model=128, dropout=0.0)
+    # model = LieClassify(p, d_model=128, dropout=0.1)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1.0, betas=(0.9, 0.98))
     # scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: min(step/10, 1))
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.1)
