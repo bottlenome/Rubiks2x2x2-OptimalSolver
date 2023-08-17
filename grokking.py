@@ -110,10 +110,10 @@ class LieNet(nn.Module):
         for i in range(src.shape[0] - 1):
             tmp = blacket(src[i], src[i + 1])
             context += src[i] + tmp
-            if i == 0:
-                a = src[i]
-                b = src[i + 1]
-                c = src[i + 2]
+            if i == src.shape[0] - 1:
+                a = src[0]
+                b = src[1]
+                c = src[2]
                 jacobi_identity = (blacket(a, blacket(b, c)) +
                                    blacket(b, blacket(c, a)) +
                                    blacket(c, blacket(a, b)))
