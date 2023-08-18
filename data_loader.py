@@ -131,6 +131,11 @@ def make_state_and_solve_state(batch):
     return torch.tensor(inputs), targets
 
 
+def get_solved_state():
+    fc = FaceCube()
+    return torch.tensor(face_str2int(fc.to_string()))
+
+
 def StateLoader(train_rate=0.9, batch_size=32, size=None):
     collate_fn = make_state_and_solve_state
 
@@ -146,20 +151,21 @@ def StateLoader(train_rate=0.9, batch_size=32, size=None):
     return train_dataloader, test_dataloader
 
 
-def NumLoader(train_rate=0.9, batch_size=32):
+def NumLoader(train_rate=0.9, batch_size=32, size=None):
     # make states as inputs, and move num as targets
     def collate_fn(batch):
         MOVE = 1
         start_state, solve_states = make_state_and_solve_state(batch)
         start_state = start_state.view(start_state.size(0), 1, -1)
         inputs = torch.cat((start_state, solve_states[:, 1:, :]), dim=1)
+        inputs[:, -1] = get_solved_state()
         targets = []
         for item in batch:
             targets.append(torch.arange(len(item[MOVE]) // 2, 0, -1))
         targets = pad_sequence(targets, batch_first=True, padding_value=0)
         return inputs, targets
 
-    data = R222ShortestAll()
+    data = R222ShortestAll(size=size)
     train_dataloader = DataLoader(data[1:int(len(data)*train_rate)],
                                   batch_size=batch_size,
                                   shuffle=True,
@@ -211,3 +217,4 @@ if __name__ == '__main__':
         print("src[0]", i[0][0])
         print("tgt[0]", i[1][0])
         break
+    print(get_solved_state())

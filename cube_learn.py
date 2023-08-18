@@ -1,0 +1,147 @@
+import torch
+import torch.nn as nn
+import data_loader
+import math
+
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model: int, dropout: float = 0.0, max_len: int = 15):
+        super().__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        position = torch.arange(max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        pe = torch.zeros(max_len, 1, 1, d_model)
+        pe[:, 0, 0, 0::2] = torch.sin(position * div_term)
+        pe[:, 0, 0, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        x = x + self.pe[:x.size(0)]
+        return self.dropout(x)
+
+class LieNet(nn.Module):
+    def __init__(self, d_model=128):
+        super().__init__()
+        self.map = nn.Linear(d_model, d_model)
+        self.relu = nn.ReLU()
+        self.blacket_product = nn.Linear(d_model*2, d_model)
+
+    def forward(self, src):
+        context = torch.zeros_like(src[0])
+        ret = []
+        src = self.relu(self.map(src))
+
+        def blacket(a, b):
+            return self.relu(self.blacket_product(torch.cat([a, b], dim = 1)))
+        
+        for i in range(src.shape[0] - 1):
+            # consider src[-1] is solved state
+            tmp = blacket(src[i], src[-1])
+            context = src[i] + tmp
+            if i == src.shape[0] - 2:
+                a = src[0]
+                b = src[1]
+                c = src[2]
+                jacobi_identity = (blacket(a, blacket(b, c)) +
+                                   blacket(b, blacket(c, a)) +
+                                   blacket(c, blacket(a, b)))
+                context += jacobi_identity
+            ret.append(context)
+        return torch.stack(ret)
+
+
+class CubeLieNumNet(nn.Module):
+    def __init__(self, d_face=24, d_color=6, d_model=128, dropout=0.0):
+        super().__init__()
+        self.embed = torch.nn.Embedding(d_color + 1, d_model)
+        self.pos_encoder = PositionalEncoding(d_model, dropout)
+        self.compress = torch.nn.Linear(d_face * d_model, d_model)
+        self.map = LieNet(d_model)
+        self.calc_num = torch.nn.Linear(d_model, 1)
+        self.relu = nn.ReLU()
+        self.d_face = d_face
+        self.d_color = d_color
+        self.d_model = d_model
+
+    def forward(self, src: torch.Tensor) -> torch.Tensor:
+        n_seq = len(src)
+        src = self.embed(src)
+        src = self.pos_encoder(src)
+        src = src.view(-1, self.d_face * self.d_model)
+        # compress by total faces
+        src = self.relu(self.compress(src))
+        src = src.view(n_seq, - 1, self.d_model)
+        out = self.map(src)
+        out = self.calc_num(out)
+        out = out.view(n_seq - 1, -1)
+        return out
+
+def main():
+    model = CubeLieNumNet(d_model=128)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
+    # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.1)
+    train_loader, test_loader = data_loader.NumLoader(train_rate=0.9, batch_size=32, size=32000)
+
+    model = model.cuda()
+    loss_fn = torch.nn.MSELoss()
+
+    import tqdm
+    from torch.utils.tensorboard import SummaryWriter
+    n_epochs = 100000
+    save_interval = 1000
+    writer = SummaryWriter()
+
+    with tqdm.tqdm(range(n_epochs)) as pbar:
+        for epoch in pbar:
+            pbar.set_description(f"Epoch {epoch + 1}/{n_epochs}")
+            model.train()
+            with tqdm.tqdm(enumerate(train_loader),
+                           total=len(train_loader),
+                           leave=False) as pbar_batch:
+                total_loss = 0
+                total_acc = 0
+                for i, (src, tgt) in pbar_batch:
+                    optimizer.zero_grad()
+                    src = src.cuda()
+                    # batch, seq, face -> seq, batch, face
+                    src = src.permute(1, 0, 2)
+                    tgt = tgt.cuda()
+                    out = model(src)
+                    loss = loss_fn(out.t(), tgt.type(torch.float))
+                    loss.backward()
+                    total_acc += (torch.round(out.t()) == tgt).sum().item() / (out.t().shape[0] * out.t().shape[1])
+                    optimizer.step()
+                    total_loss += loss.item()
+                    pbar_batch.set_postfix(loss=total_loss / (i + 1))
+                    if i % 1000 == 0:
+                        for j in range(5):
+                                print(torch.round(out.t()[j]), tgt[j])
+                writer.add_scalar("Loss/train", total_loss / len(train_loader), epoch)
+                writer.add_scalar("Accuracy/train", total_acc / len(train_loader), epoch)
+            # eval
+            model.eval()
+            loss = 0
+            accu = 0
+            with torch.no_grad(), tqdm.tqdm(enumerate(test_loader),
+                                            total=len(test_loader),
+                                            leave=False) as test_pbar:
+                test_pbar.set_description(f"Test")
+                for i, (src, tgt) in test_pbar:
+                    src = src.cuda()
+                    src = src.permute(1, 0, 2)
+                    tgt = tgt.cuda()
+                    out = model(src)
+                    loss += loss_fn(out.t(), tgt.type(torch.float))
+                    accu += (torch.round(out.t()) == tgt).sum().item() / (out.t().shape[0] * out.t().shape[1])
+                    test_pbar.set_postfix({'loss': loss.item() / (i + 1)})
+                writer.add_scalar("Loss/test", loss / len(test_loader), epoch)
+                writer.add_scalar("Accuracy/test", accu / len(test_loader), epoch)
+            # scheduler.step()
+
+if __name__ == '__main__':
+    model = CubeLieNumNet()
+    input = torch.zeros(13, 16, 24).long()
+    out = model(input)
+    print(out.shape)
+
+    main()
