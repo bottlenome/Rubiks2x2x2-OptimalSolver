@@ -111,7 +111,7 @@ class LieNet(nn.Module):
         for i in range(src.shape[0] - 1):
             tmp = blacket(src[i], src[i + 1])
             context += src[i] + tmp
-            if i == src.shape[0] - 1:
+            if i == src.shape[0] - 2:
                 a = src[0]
                 b = src[1]
                 c = src[2]
@@ -119,7 +119,7 @@ class LieNet(nn.Module):
                                    blacket(b, blacket(c, a)) +
                                    blacket(c, blacket(a, b)))
                 context += jacobi_identity
-            ret.append(context)
+            ret.append(context.clone())
         return torch.stack(ret)
 
 
@@ -151,8 +151,8 @@ def main():
     # model = SimpleFormer(p, d_model=128, nhead=8, num_encoder_layers=1, num_decoder_layers=3, dropout=0.00)
     # default d_model=128, nhead=4, num_layers=1, d__mlp=n_layers * 4
     # model = GPT(p, d_model=128, nhead=4, num_layers=3, dropout=0.00)
-    model = AccelNet(p, d_model=128, dropout=0.0)
-    # model = LieClassify(p, d_model=128, dropout=0.1)
+    # model = AccelNet(p, d_model=128, dropout=0.1)
+    model = LieClassify(p, d_model=128, dropout=0.0)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1.0, betas=(0.9, 0.98))
     # scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: min(step/10, 1))
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.1)
