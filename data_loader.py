@@ -102,34 +102,37 @@ def face_str2int(face_str):
             raise ValueError("Invalid face char: {}".format(c))
     return ret
 
+def make_state_and_solve_state(batch):
+    FACE = 0
+    MOVE = 1
+    inputs = [face_str2int(item[FACE]) for item in batch]
+    targets = []
+    for item in batch:
+        faces = [[0] * 24]
+        fc = FaceCube()
+        s = fc.from_string(item[FACE])
+        if s is not True:
+            raise ValueError("Error in facelet cube")
+        cc = fc.to_cubie_cube()
+        s = cc.verify()
+        if s != cubie.CUBE_OK:
+            raise ValueError("Error in cubie cube")
+        co_cube = CoordCube(cc)
+        for i in range(0, len(item[MOVE]), 2):
+            m = char2move(item[MOVE][i:i+2])
+            co_cube.corntwist = mv.corntwist_move[N_MOVE * co_cube.corntwist + m]
+            co_cube.cornperm = mv.cornperm_move[N_MOVE * co_cube.cornperm + m]
+            cc = cubie.CubieCube()
+            cc.set_corners(co_cube.cornperm)
+            cc.set_cornertwist(co_cube.corntwist)
+            faces.append(face_str2int(cc.to_facelet_cube().to_string()))
+        targets.append(torch.tensor(faces))
+    targets = pad_sequence(targets, batch_first=True, padding_value=0)
+    return torch.tensor(inputs), targets
+
+
 def StateLoader(train_rate=0.9, batch_size=32, size=None):
-    def collate_fn(batch):
-        FACE = 0
-        MOVE = 1
-        inputs = [face_str2int(item[FACE]) for item in batch]
-        targets = []
-        for item in batch:
-            faces = [[0] * 24]
-            fc = FaceCube()
-            s = fc.from_string(item[FACE])
-            if s is not True:
-                raise ValueError("Error in facelet cube")
-            cc = fc.to_cubie_cube()
-            s = cc.verify()
-            if s != cubie.CUBE_OK:
-                raise ValueError("Error in cubie cube")
-            co_cube = CoordCube(cc)
-            for i in range(0, len(item[MOVE]), 2):
-                m = char2move(item[MOVE][i:i+2])
-                co_cube.corntwist = mv.corntwist_move[N_MOVE * co_cube.corntwist + m]
-                co_cube.cornperm = mv.cornperm_move[N_MOVE * co_cube.cornperm + m]
-                cc = cubie.CubieCube()
-                cc.set_corners(co_cube.cornperm)
-                cc.set_cornertwist(co_cube.corntwist)
-                faces.append(face_str2int(cc.to_facelet_cube().to_string()))
-            targets.append(torch.tensor(faces))
-        targets = pad_sequence(targets, batch_first=True, padding_value=0)
-        return torch.tensor(inputs), targets
+    collate_fn = make_state_and_solve_state
 
     data = R222ShortestAll(size=size)
     train_dataloader = DataLoader(data[1:int(len(data)*train_rate)],
@@ -141,6 +144,32 @@ def StateLoader(train_rate=0.9, batch_size=32, size=None):
                                  shuffle=False,
                                  collate_fn=collate_fn)
     return train_dataloader, test_dataloader
+
+
+def NumLoader(train_rate=0.9, batch_size=32):
+    # make states as inputs, and move num as targets
+    def collate_fn(batch):
+        MOVE = 1
+        start_state, solve_states = make_state_and_solve_state(batch)
+        start_state = start_state.view(start_state.size(0), 1, -1)
+        inputs = torch.cat((start_state, solve_states[:, 1:, :]), dim=1)
+        targets = []
+        for item in batch:
+            targets.append(torch.arange(len(item[MOVE]) // 2, 0, -1))
+        targets = pad_sequence(targets, batch_first=True, padding_value=0)
+        return inputs, targets
+
+    data = R222ShortestAll()
+    train_dataloader = DataLoader(data[1:int(len(data)*train_rate)],
+                                  batch_size=batch_size,
+                                  shuffle=True,
+                                  collate_fn=collate_fn)
+    test_dataloader = DataLoader(data[int(len(data)*train_rate):],
+                                 batch_size=batch_size,
+                                 shuffle=False,
+                                 collate_fn=collate_fn)
+    return train_dataloader, test_dataloader
+
 
 if __name__ == '__main__':
     data = R222ShortestAll()
@@ -165,6 +194,16 @@ if __name__ == '__main__':
 
     print("StateLoader")
     train_dataloader, test_dataloader = StateLoader(batch_size=10)
+    for i in train_dataloader:
+        print("src, tgt", len(i))
+        print("src.shape", i[0].shape)
+        print("tgt.shape", i[1].shape)
+        print("src[0]", i[0][0])
+        print("tgt[0]", i[1][0])
+        break
+
+    print("NumLoader")
+    train_dataloader, test_dataloader = NumLoader(batch_size=10)
     for i in train_dataloader:
         print("src, tgt", len(i))
         print("src.shape", i[0].shape)
