@@ -13,6 +13,7 @@ import cubie
 from coord import CoordCube
 from defs import N_MOVE
 import moves as mv
+from functools import cache
 
 class RubicDataset(Dataset):
     def __init__(self, data, transform=None):
@@ -103,6 +104,7 @@ def face_str2int(face_str):
             raise ValueError("Invalid face char: {}".format(c))
     return ret
 
+
 def make_state_and_solve_state(batch):
     FACE = 0
     MOVE = 1
@@ -131,7 +133,7 @@ def make_state_and_solve_state(batch):
     targets = pad_sequence(targets, batch_first=True, padding_value=0)
     return torch.tensor(inputs), targets
 
-
+@cache
 def get_solved_state():
     fc = FaceCube()
     return torch.tensor(face_str2int(fc.to_string()))
@@ -169,10 +171,10 @@ def NumLoader(train_rate=0.9, batch_size=32, size=None):
     data = R222ShortestAll(size=size)
 
     train_dataloader = IterableWrapper(data[1:int(len(data)*train_rate)])
-    train_dataloader = train_dataloader.shuffle(buffer_size=100000)
     train_dataloader = train_dataloader.batch(batch_size=batch_size, drop_last=True)
     train_dataloader = train_dataloader.collate(collate_fn=collate_fn)
     train_dataloader = train_dataloader.in_memory_cache(size=5000)
+    train_dataloader = train_dataloader.shuffle(buffer_size=100000)
 
 
     test_dataloader = IterableWrapper(data[int(len(data)*train_rate):])
@@ -219,12 +221,23 @@ if __name__ == '__main__':
     """
 
     print("NumLoader")
-    train_dataloader, test_dataloader = NumLoader(batch_size=10)
+    train_dataloader, test_dataloader = NumLoader(batch_size=10, size=500)
+    j = 0
     for i in train_dataloader:
-        print("src, tgt", len(i))
-        print("src.shape", i[0].shape)
-        print("tgt.shape", i[1].shape)
-        print("src[0]", i[0][0])
-        print("tgt[0]", i[1][0])
-        break
+        if j == 0:
+            print("src, tgt", len(i))
+            print("src.shape", i[0].shape)
+            print("tgt.shape", i[1].shape)
+            print("src[0]", i[0][0])
+            print("tgt[0]", i[1][0])
+            j += 1
+    j = 0
+    for i in train_dataloader:
+        if j == 0:
+            print("src, tgt", len(i))
+            print("src.shape", i[0].shape)
+            print("tgt.shape", i[1].shape)
+            print("src[0]", i[0][0])
+            print("tgt[0]", i[1][0])
+            j += 1
     print(get_solved_state())

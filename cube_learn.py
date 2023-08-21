@@ -37,7 +37,7 @@ class LieNet(nn.Module):
         for i in range(src.shape[0] - 1):
             # consider src[-1] is solved state
             tmp = blacket(src[i], src[-1])
-            context = src[i] + tmp
+            context += src[i] + tmp
             if i == src.shape[0] - 2:
                 a = src[0]
                 b = src[1]
@@ -46,7 +46,7 @@ class LieNet(nn.Module):
                                    blacket(b, blacket(c, a)) +
                                    blacket(c, blacket(a, b)))
                 context += jacobi_identity
-            ret.append(context)
+            ret.append(context.clone())
         return torch.stack(ret)
 
 
@@ -78,9 +78,9 @@ class CubeLieNumNet(nn.Module):
 
 def main():
     model = CubeLieNumNet(d_model=128)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
-    # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.1)
-    train_loader, test_loader = data_loader.NumLoader(train_rate=0.9, batch_size=32, size=32000)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.0001)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.1)
+    train_loader, test_loader = data_loader.NumLoader(train_rate=0.9, batch_size=512, size=12400)
 
     model = model.cuda()
     loss_fn = torch.nn.MSELoss()
@@ -136,7 +136,22 @@ def main():
                     test_pbar.set_postfix({'loss': loss.item() / (i + 1)})
                 writer.add_scalar("Loss/test", loss / len(test_loader), epoch)
                 writer.add_scalar("Accuracy/test", accu / len(test_loader), epoch)
+            if epoch % save_interval == 0:
+                save_dict = {
+                    'model': model.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                    'scheduler': scheduler.state_dict(),
+                    'epoch': epoch,
+                }
+                torch.save(save_dict, f"save/results_{epoch}.pth")
             # scheduler.step()
+    save_dict = {
+        'model': model.state_dict(),
+        'optimizer': optimizer.state_dict(),
+        'scheduler': scheduler.state_dict(),
+        'epoch': epoch,
+    }
+    torch.save(save_dict, f"save/results_{epoch}.pth")
 
 if __name__ == '__main__':
     model = CubeLieNumNet()
