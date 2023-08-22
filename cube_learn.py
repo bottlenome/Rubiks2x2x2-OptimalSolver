@@ -34,10 +34,15 @@ class LieNet(nn.Module):
         def blacket(a, b):
             return self.relu(self.blacket_product(torch.cat([a, b], dim = 1)))
         
-        for i in range(src.shape[0] - 1):
+        for i in range(src.shape[0]):
             # consider src[-1] is solved state
-            tmp = blacket(src[i], src[-1])
-            context += src[i] + tmp
+            if i == 0:
+                x = torch.zeros_like(src[0])
+                y = src[0]
+            else:
+                x = src[i - 1]
+                y = src[i]
+            context += x + blacket(x, y)
             if i == src.shape[0] - 2:
                 a = src[0]
                 b = src[1]
@@ -51,12 +56,15 @@ class LieNet(nn.Module):
 
 
 class CubeLieNumNet(nn.Module):
-    def __init__(self, d_face=24, d_color=6, d_model=128, dropout=0.0):
+    def __init__(self, d_face=24, d_color=6, d_model=128, n_layers=1, dropout=0.0):
         super().__init__()
         self.embed = torch.nn.Embedding(d_color + 1, d_model)
         self.pos_encoder = PositionalEncoding(d_model, dropout)
         self.compress = torch.nn.Linear(d_face * d_model, d_model)
         self.map = LieNet(d_model)
+        self.map = nn.Sequential()
+        for i in range(n_layers):
+            self.map.add_module(f"lie{i}", LieNet(d_model))
         self.calc_num = torch.nn.Linear(d_model, 1)
         self.relu = nn.ReLU()
         self.d_face = d_face
@@ -70,24 +78,25 @@ class CubeLieNumNet(nn.Module):
         src = src.view(-1, self.d_face * self.d_model)
         # compress by total faces
         src = self.relu(self.compress(src))
-        src = src.view(n_seq, - 1, self.d_model)
-        out = self.map(src)
+        out = src.view(n_seq, - 1, self.d_model)
+        for i in range(len(self.map)):
+            out = self.map[i](out)
         out = self.calc_num(out)
-        out = out.view(n_seq - 1, -1)
-        return out
+        out = out.view(n_seq, -1)
+        return out[:-1]
 
-def main():
-    model = CubeLieNumNet(d_model=128)
+def main(d_model=128, n_layers=1, n_epochs=100000, n_data=5000, batch_size=512):
+    model = CubeLieNumNet(d_model=d_model, n_layers=n_layers)
     optimizer = torch.optim.AdamW(model.parameters(), lr=0.0001)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.1)
-    train_loader, test_loader = data_loader.NumLoader(train_rate=0.9, batch_size=512, size=12400)
+    train_loader, test_loader = data_loader.NumLoader(train_rate=0.9, batch_size=batch_size, size=n_data)
 
     model = model.cuda()
     loss_fn = torch.nn.MSELoss()
 
     import tqdm
     from torch.utils.tensorboard import SummaryWriter
-    n_epochs = 100000
+    n_epochs = n_epochs
     save_interval = 1000
     writer = SummaryWriter()
 
