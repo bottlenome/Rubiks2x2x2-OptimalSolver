@@ -94,19 +94,19 @@ def main(d_model=128, n_layers=1, n_epochs=100000, n_data=5000, batch_size=512):
     model = model.cuda()
     loss_fn = torch.nn.MSELoss()
 
-    import tqdm
+    from tqdm.notebook import tqdm
     from torch.utils.tensorboard import SummaryWriter
     n_epochs = n_epochs
     save_interval = 1000
     writer = SummaryWriter()
 
-    with tqdm.tqdm(range(n_epochs)) as pbar:
+    with tqdm(range(n_epochs)) as pbar:
         for epoch in pbar:
             pbar.set_description(f"Epoch {epoch + 1}/{n_epochs}")
             model.train()
-            with tqdm.tqdm(enumerate(train_loader),
-                           total=len(train_loader),
-                           leave=False) as pbar_batch:
+            with tqdm(enumerate(train_loader),
+                      total=len(train_loader),
+                      leave=False) as pbar_batch:
                 total_loss = 0
                 total_acc = 0
                 for i, (src, tgt) in pbar_batch:
@@ -131,9 +131,9 @@ def main(d_model=128, n_layers=1, n_epochs=100000, n_data=5000, batch_size=512):
             model.eval()
             loss = 0
             accu = 0
-            with torch.no_grad(), tqdm.tqdm(enumerate(test_loader),
-                                            total=len(test_loader),
-                                            leave=False) as test_pbar:
+            with torch.no_grad(), tqdm(enumerate(test_loader),
+                                       total=len(test_loader),
+                                       leave=False) as test_pbar:
                 test_pbar.set_description(f"Test")
                 for i, (src, tgt) in test_pbar:
                     src = src.cuda()
