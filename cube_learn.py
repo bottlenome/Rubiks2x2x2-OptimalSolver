@@ -2,6 +2,13 @@ import torch
 import torch.nn as nn
 import data_loader
 import math
+import sys
+
+
+def is_colab():
+    module_list = sys.modules
+    return 'google.colab' in module_list
+
 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model: int, dropout: float = 0.0, max_len: int = 15):
@@ -85,7 +92,7 @@ class CubeLieNumNet(nn.Module):
         out = out.view(n_seq, -1)
         return out[:-1]
 
-def main(d_model=128, n_layers=1, n_epochs=100000, n_data=5000, batch_size=512):
+def main(d_model=128, n_layers=3, n_epochs=100000, n_data=512000, batch_size=512, debug_print=False):
     model = CubeLieNumNet(d_model=d_model, n_layers=n_layers)
     optimizer = torch.optim.AdamW(model.parameters(), lr=0.0001)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.1)
@@ -94,7 +101,10 @@ def main(d_model=128, n_layers=1, n_epochs=100000, n_data=5000, batch_size=512):
     model = model.cuda()
     loss_fn = torch.nn.MSELoss()
 
-    from tqdm.notebook import tqdm
+    if is_colab():
+        from tqdm.notebook import tqdm
+    else:
+        from tqdm import tqdm
     from torch.utils.tensorboard import SummaryWriter
     n_epochs = n_epochs
     save_interval = 1000
@@ -122,7 +132,7 @@ def main(d_model=128, n_layers=1, n_epochs=100000, n_data=5000, batch_size=512):
                     optimizer.step()
                     total_loss += loss.item()
                     pbar_batch.set_postfix(loss=total_loss / (i + 1))
-                    if i % 1000 == 0:
+                    if i % 1000 == 0 and debug_print:
                         for j in range(5):
                                 print(torch.round(out.t()[j]), tgt[j])
                 writer.add_scalar("Loss/train", total_loss / len(train_loader), epoch)

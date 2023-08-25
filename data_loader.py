@@ -173,17 +173,14 @@ def NumLoader(train_rate=0.9, batch_size=32, size=None):
     train_dataloader = IterableWrapper(data[1:int(len(data)*train_rate)])
     train_dataloader = train_dataloader.batch(batch_size=batch_size, drop_last=True)
     train_dataloader = train_dataloader.collate(collate_fn=collate_fn)
-    train_dataloader = train_dataloader.in_memory_cache(size=5000)
-    train_dataloader = train_dataloader.shuffle(buffer_size=100000)
+    train_dataloader = train_dataloader.in_memory_cache(size=500000)
+    train_dataloader = train_dataloader.shuffle(buffer_size=500000)
 
 
     test_dataloader = IterableWrapper(data[int(len(data)*train_rate):])
     test_dataloader = test_dataloader.batch(batch_size=batch_size, drop_last=True)
-    test_dataloader = test_dataloader.in_memory_cache(size=5000)
-    test_dataloader = DataLoader(data[int(len(data)*train_rate):],
-                                 batch_size=batch_size,
-                                 shuffle=False,
-                                 collate_fn=collate_fn)
+    test_dataloader = test_dataloader.collate(collate_fn=collate_fn)
+    test_dataloader = test_dataloader.in_memory_cache(size=100000)
     return train_dataloader, test_dataloader
 
 
