@@ -68,7 +68,6 @@ class CubeLieNumNet(nn.Module):
         self.embed = torch.nn.Embedding(d_color + 1, d_model)
         self.pos_encoder = PositionalEncoding(d_model, dropout)
         self.compress = torch.nn.Linear(d_face * d_model, d_model)
-        self.map = LieNet(d_model)
         self.map = nn.Sequential()
         for i in range(n_layers):
             self.map.add_module(f"lie{i}", LieNet(d_model))
@@ -92,8 +91,34 @@ class CubeLieNumNet(nn.Module):
         out = out.view(n_seq, -1)
         return out[:-1]
 
-def main(d_model=128, n_layers=3, n_epochs=100000, n_data=512000, batch_size=512, debug_print=False):
-    model = CubeLieNumNet(d_model=d_model, n_layers=n_layers)
+class GPTNumNet(nn.Module):
+    def __init__(self, d_face=24, d_color=6, d_model=128, n_head=4, n_layers=6, dropout=0.0):
+        super().__init__()
+        self.embed = torch.nn.Embedding(d_color + 1, d_model)
+        self.pos_encoder = PositionalEncoding(d_model, dropout)
+        self.compress = torch.nn.Linear(d_face * d_model, d_model)
+        encoder_layer = nn.TransformerEncoderLayer(d_model, nhead=n_head, dim_feedforward=d_model*4, dropout=dropout)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=n_layers, norm=None)
+        self.calc_num = torch.nn.Linear(d_model, 1)
+        self.d_face = d_face
+        self.d_model = d_model
+
+    def forward(self, src: torch.Tensor) -> torch.Tensor:
+        n_seq = len(src)
+        src = self.embed(src)
+        src = self.pos_encoder(src)
+        src = src.view(-1, self.d_face * self.d_model)
+        src = self.compress(src)
+        out = self.transformer_encoder(src)
+        out = self.calc_num(out)
+        out = out.view(n_seq, -1)
+        return out[:-1]
+
+def main(d_model=128, n_layers=3, n_epochs=100000, n_data=512000, batch_size=512, model="lie", debug_print=False):
+    if model == "GPT":
+        model = GPTNumNet(d_model=d_model, n_layers=n_layers)
+    else:
+        model = CubeLieNumNet(d_model=d_model, n_layers=n_layers)
     optimizer = torch.optim.AdamW(model.parameters(), lr=0.0001)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.1)
     train_loader, test_loader = data_loader.NumLoader(train_rate=0.9, batch_size=batch_size, size=n_data)
@@ -173,9 +198,15 @@ def main(d_model=128, n_layers=3, n_epochs=100000, n_data=512000, batch_size=512
     torch.save(save_dict, f"save/results_{epoch}.pth")
 
 if __name__ == '__main__':
-    model = CubeLieNumNet()
-    input = torch.zeros(13, 16, 24).long()
-    out = model(input)
-    print(out.shape)
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", type=str, default="lie")
+    parser.add_argument("--d_model", type=int, default=128)
+    parser.add_argument("--n_layers", type=int, default=3)
+    parser.add_argument("--n_epochs", type=int, default=100000)
+    parser.add_argument("--n_data", type=int, default=512000)
+    parser.add_argument("--batch_size", type=int, default=512)
+    parser.add_argument("--debug_print", action="store_true")
+    args = parser.parse_args()
 
-    main()
+    main(d_model=args.d_model, n_layers=args.n_layers, n_epochs=args.n_epochs, n_data=args.n_data, batch_size=args.batch_size, model=args.model, debug_print=args.debug_print)
