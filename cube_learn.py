@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import data_loader
 import math
 import sys
@@ -165,6 +166,37 @@ class CubeLieNumNet(nn.Module):
         out = out.view(n_seq, -1)
         return out[:-1]
 
+
+class CubeLieStateNet(nn.Module):
+    def __init__(self, d_face=24, d_color=6, d_model=128, n_layers=1, dropout=0.0, mode="base"):
+        super().__init__()
+        self.embed = torch.nn.Embedding(d_color + 1, d_model)
+        self.pos_encoder = PositionalEncoding(d_model, dropout)
+        self.compress = torch.nn.Linear(d_face * d_model, d_model)
+        self.map = nn.Sequential()
+        for i in range(n_layers):
+            self.map.add_module(f"lie{i}", LieNet(d_model, mode=mode))
+        self.remap = torch.nn.Linear(d_model, d_face * (d_color + 1))
+        self.relu = nn.ReLU()
+        self.d_face = d_face
+        self.d_color = d_color
+        self.d_model = d_model
+
+    def forward(self, src: torch.Tensor) -> torch.Tensor:
+        n_seq = len(src)
+        src = self.embed(src)
+        src = self.pos_encoder(src)
+        src = src.view(-1, self.d_face * self.d_model)
+        # compress by total faces
+        src = self.relu(self.compress(src))
+        out = src.view(n_seq, - 1, self.d_model)
+        for i in range(len(self.map)):
+            out = self.map[i](out)
+        out = self.remap(out)
+        out = out.view(n_seq, -1, self.d_face, self.d_color + 1)
+        out = F.softmax(out, dim=3)
+        return out[:-1]
+
 class GPTNumNet(nn.Module):
     def __init__(self, d_face=24, d_color=6, d_model=128, n_head=4, n_layers=6, dropout=0.0):
         super().__init__()
@@ -189,18 +221,31 @@ class GPTNumNet(nn.Module):
         return out[:-1]
 
 def main(d_model=128, n_layers=3,
+         data_type="num",
          n_interval=1000, n_epochs=100000, n_data=512000, batch_size=512,
          model="lie", lie_mode="base", debug_print=False):
-    if model == "GPT":
-        model = GPTNumNet(d_model=d_model, n_layers=n_layers)
+    if data_type == "num":
+        if model == "GPT":
+            model = GPTNumNet(d_model=d_model, n_layers=n_layers)
+        else:
+            model = CubeLieNumNet(d_model=d_model, n_layers=n_layers, mode=lie_mode)
     else:
-        model = CubeLieNumNet(d_model=d_model, n_layers=n_layers, mode=lie_mode)
+        if model == "GPT":
+            raise NotImplementedError("GPT is not implemented for state")
+        else:
+            model = CubeLieStateNet(d_model=d_model, n_layers=n_layers, mode=lie_mode)
     optimizer = torch.optim.AdamW(model.parameters(), lr=0.0001)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.1)
-    train_loader, test_loader = data_loader.NumLoader(train_rate=0.9, batch_size=batch_size, size=n_data)
+    if data_type == "num":
+        train_loader, test_loader = data_loader.NumLoader(train_rate=0.9, batch_size=batch_size, size=n_data)
+    else:
+        train_loader, test_loader = data_loader.StateLoader2(train_rate=0.9, batch_size=batch_size, size=n_data)
 
     model = model.cuda()
-    loss_fn = torch.nn.MSELoss()
+    if data_type == "num":
+        loss_fn = torch.nn.MSELoss()
+    else:
+        loss_fn = torch.nn.CrossEntropyLoss(ignore_index=0)
 
     if is_colab():
         from tqdm.notebook import tqdm
@@ -228,9 +273,16 @@ def main(d_model=128, n_layers=3,
                     src = src.permute(1, 0, 2)
                     tgt = tgt.cuda()
                     out = model(src)
-                    loss = loss_fn(out.t(), tgt.type(torch.float))
+                    if data_type == "num":
+                        loss = loss_fn(out.t(), tgt.type(torch.float))
+                        total_acc += (torch.round(out.t()) == tgt).sum().item() / (out.t().shape[0] * out.t().shape[1])
+                    else:
+                        out = out.permute(1, 0, 2, 3)
+                        out = out.reshape(-1, out.size(-1))
+                        tgt = tgt.view(-1)
+                        loss = loss_fn(out, tgt)
+                        total_acc += (torch.argmax(out, dim=-1) == tgt).float().mean().item()
                     loss.backward()
-                    total_acc += (torch.round(out.t()) == tgt).sum().item() / (out.t().shape[0] * out.t().shape[1])
                     optimizer.step()
                     total_loss += loss.item()
                     pbar_batch.set_postfix(loss=total_loss / (i + 1))
@@ -252,8 +304,15 @@ def main(d_model=128, n_layers=3,
                     src = src.permute(1, 0, 2)
                     tgt = tgt.cuda()
                     out = model(src)
-                    loss += loss_fn(out.t(), tgt.type(torch.float))
-                    accu += (torch.round(out.t()) == tgt).sum().item() / (out.t().shape[0] * out.t().shape[1])
+                    if data_type == "num":
+                        loss += loss_fn(out.t(), tgt.type(torch.float))
+                        accu += (torch.round(out.t()) == tgt).sum().item() / (out.t().shape[0] * out.t().shape[1])
+                    else:
+                        out = out.permute(1, 0, 2, 3)
+                        out = out.reshape(-1, out.size(-1))
+                        tgt = tgt.view(-1)
+                        loss += loss_fn(out, tgt)
+                        accu += (torch.argmax(out, dim=-1) == tgt).float().mean().item()
                     test_pbar.set_postfix({'loss': loss.item() / (i + 1)})
                 writer.add_scalar("Loss/test", loss / len(test_loader), epoch)
                 writer.add_scalar("Accuracy/test", accu / len(test_loader), epoch)
@@ -286,7 +345,10 @@ if __name__ == '__main__':
     parser.add_argument("--batch_size", type=int, default=512)
     parser.add_argument("--debug_print", action="store_true")
     parser.add_argument("--lie_mode", type=str, default="base")
+    parser.add_argument("--data_type", type=str, default="num")
     args = parser.parse_args()
 
-    main(d_model=args.d_model, n_layers=args.n_layers, n_epochs=args.n_epochs, n_data=args.n_data, batch_size=args.batch_size,
+    main(d_model=args.d_model, n_layers=args.n_layers,
+         data_type=args.data_type,
+         n_epochs=args.n_epochs, n_data=args.n_data, batch_size=args.batch_size,
          model=args.model, lie_mode=args.lie_mode, debug_print=args.debug_print)

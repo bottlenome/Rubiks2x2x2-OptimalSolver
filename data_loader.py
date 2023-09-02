@@ -176,6 +176,28 @@ def NumLoader(train_rate=0.9, batch_size=32, size=None):
     train_dataloader = train_dataloader.in_memory_cache(size=500000)
     train_dataloader = train_dataloader.shuffle(buffer_size=500000)
 
+    test_dataloader = IterableWrapper(data[int(len(data)*train_rate):])
+    test_dataloader = test_dataloader.batch(batch_size=batch_size, drop_last=True)
+    test_dataloader = test_dataloader.collate(collate_fn=collate_fn)
+    test_dataloader = test_dataloader.in_memory_cache(size=100000)
+    return train_dataloader, test_dataloader
+
+
+def StateLoader2(train_rate=0.9, batch_size=32, size=None):
+    def collate_fn(batch):
+        start_state, solve_states = make_state_and_solve_state(batch)
+        inputs = solve_states[:]
+        inputs[:, 0] = start_state
+        targets = solve_states[:, 1:]
+        return inputs, targets
+
+    data = R222ShortestAll(size=size)
+
+    train_dataloader = IterableWrapper(data[1:int(len(data)*train_rate)])
+    train_dataloader = train_dataloader.batch(batch_size=batch_size, drop_last=True)
+    train_dataloader = train_dataloader.collate(collate_fn=collate_fn)
+    train_dataloader = train_dataloader.in_memory_cache(size=500000)
+    train_dataloader = train_dataloader.shuffle(buffer_size=500000)
 
     test_dataloader = IterableWrapper(data[int(len(data)*train_rate):])
     test_dataloader = test_dataloader.batch(batch_size=batch_size, drop_last=True)
@@ -215,7 +237,6 @@ if __name__ == '__main__':
         print("src[0]", i[0][0])
         print("tgt[0]", i[1][0])
         break
-    """
 
     print("NumLoader")
     train_dataloader, test_dataloader = NumLoader(batch_size=10, size=500)
@@ -226,6 +247,7 @@ if __name__ == '__main__':
             print("src.shape", i[0].shape)
             print("tgt.shape", i[1].shape)
             print("src[0]", i[0][0])
+            print("src[-1]", i[0][0, -1])
             print("tgt[0]", i[1][0])
             j += 1
     j = 0
@@ -238,3 +260,14 @@ if __name__ == '__main__':
             print("tgt[0]", i[1][0])
             j += 1
     print(get_solved_state())
+    """
+
+    print("StateLoader2")
+    train_dataloader, test_dataloader = StateLoader2(batch_size=10, size=5000)
+    for i in train_dataloader:
+        print("src, tgt", len(i))
+        print("src.shape", i[0].shape)
+        print("tgt.shape", i[1].shape)
+        print("src[0]", i[0][0])
+        print("tgt[0]", i[1][0])
+        break
