@@ -104,6 +104,24 @@ def face_str2int(face_str):
             raise ValueError("Invalid face char: {}".format(c))
     return ret
 
+def face_int2str(face_int):
+    ret = ""
+    for i in face_int:
+        if i == 1:
+            ret += 'U'
+        elif i == 2:
+            ret += 'R'
+        elif i == 3:
+            ret += 'F'
+        elif i == 4:
+            ret += 'D'
+        elif i == 5:
+            ret += 'L'
+        elif i == 6:
+            ret += 'B'
+        else:
+            raise ValueError("Invalid face int: {}".format(i))
+    return ret
 
 def make_state_and_solve_state(batch):
     FACE = 0
