@@ -119,6 +119,15 @@ class LieNet(nn.Module):
                     ret = 2 * x + 2 * v - context
                 context = x + 2 * v
                 return context, ret
+        elif mode == "7_without_context":
+            def lie_func(i, src, context):
+                if i == 0:
+                    x = torch.zeros_like(src[0])
+                    y = src[0]
+                else:
+                    x = src[i - 1]
+                    y = src[i]
+                return context, x + self.relu(blacket(x, y))
         else:
             raise NotImplementedError(f"mode {mode} is not implemented")
 
@@ -244,7 +253,10 @@ def main(d_model=128, n_layers=3,
             raise NotImplementedError("GPT is not implemented for state")
         else:
             model = CubeLieStateNet(d_model=d_model, n_layers=n_layers, mode=lie_mode)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=0.0001)
+    if data_type == "num":
+        optimizer = torch.optim.AdamW(model.parameters(), lr=0.0001)
+    else:
+        optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.1)
     if data_type == "num":
         train_loader, test_loader = data_loader.NumLoader(train_rate=0.9, batch_size=batch_size, size=n_data)
