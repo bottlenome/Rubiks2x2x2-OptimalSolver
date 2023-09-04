@@ -108,7 +108,17 @@ class LieNet(nn.Module):
                     x = src[i - 1]
                     y = src[i]
                 return context, self.alpha * x + (1 - self.alpha) * blacket(x, y)
-
+        elif mode == "6_vector_condition":
+            def lie_func(i, src, context):
+                x = src[0]
+                t = src[-1]
+                v = blacket(x, t)
+                if i == 0:
+                    ret = x + v
+                else:
+                    ret = 2 * x + 2 * v - context
+                context = x + 2 * v
+                return context, ret
         else:
             raise NotImplementedError(f"mode {mode} is not implemented")
 
@@ -132,7 +142,7 @@ class LieNet(nn.Module):
                 jacobi_identity = (self.blacket(a, self.blacket(b, c)) +
                                    self.blacket(b, self.blacket(c, a)) +
                                    self.blacket(c, self.blacket(a, b)))
-                context += jacobi_identity
+                r += jacobi_identity
             ret.append(r.clone())
         return torch.stack(ret)
 
@@ -256,6 +266,8 @@ def main(d_model=128, n_layers=3,
     save_interval = n_interval
     writer = SummaryWriter()
     interval = IntervalCheckPoint()
+    with open(f"{writer.get_logdir()}/save", "w") as f:
+        f.write(f"{sys.argv}\n")
 
     with tqdm(range(n_epochs)) as pbar:
         for epoch in pbar:
@@ -331,7 +343,7 @@ def main(d_model=128, n_layers=3,
         'scheduler': scheduler.state_dict(),
         'epoch': epoch,
     }
-    torch.save(save_dict, f"{writer.get_logdir()}/results_{epoch}.pth")
+    torch.save(save_dict, f"{writer.get_logdir()}/{epoch}.pth")
 
 if __name__ == '__main__':
     import argparse
