@@ -57,6 +57,7 @@ def evaluate_state(model, seq, seq_i):
 def evaluate(model, data_type, p_num=100):
     model.eval()
     start = time.time()
+    valid = p_num
     solved = 0
     for i in range(p_num):
         # create problem
@@ -69,7 +70,7 @@ def evaluate(model, data_type, p_num=100):
         # data_type == "num"
         # make input
         # choose the best output
-        while (co_cube.corntwist != 0 or co_cube.cornperm != 0) and seq_i < 10:
+        while (co_cube.corntwist != 0 or co_cube.cornperm != 0) and seq_i < 11:
             seq_i += 1
             print(seq_i)
             if data_type == "num":
@@ -78,7 +79,9 @@ def evaluate(model, data_type, p_num=100):
                 try:
                     seq[seq_i, :], co_cube = evaluate_state(model, seq, seq_i)
                 except ValueError as e:
+                    print("seq_i: ", seq_i)
                     print(e)
+                    valid -= 1
                     break
 
         if co_cube.corntwist == 0 and co_cube.cornperm == 0:
@@ -91,6 +94,7 @@ def evaluate(model, data_type, p_num=100):
 
     end = time.time()
     print("Time: ", (end-start)/p_num)
+    print(f"Valid: {valid/p_num}")
     print(f"Accuracy: {solved/p_num}")
 
 def main(pth_path, model="lie", lie_mode="base", data_type="num", d_model=128, n_layers=3):
