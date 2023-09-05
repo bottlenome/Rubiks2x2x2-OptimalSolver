@@ -225,9 +225,9 @@ def StateLoader2(train_rate=0.9, batch_size=32, size=None):
 
 
 if __name__ == '__main__':
-    """
     data = R222ShortestAll()
     print("data size", len(data))
+    """
     data = R222ShortestAll(size=100000)
     print("data size", len(data))
     print("example data[0]", data[0])
