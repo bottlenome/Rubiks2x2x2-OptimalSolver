@@ -98,6 +98,18 @@ class LieNet(nn.Module):
                 context = self.alpha * context + self.beta * x + self.blacket(x, y)
                 r = x + context
                 return context, r
+        elif mode == "4_blacket_rule":
+            self.alpha = nn.Parameter(torch.tensor(0.5))
+            def lie_func(i, src, context):
+                if i == 0:
+                    x = torch.ones_like(src[0])
+                    y = src[0]
+                else:
+                    x = src[i - 1]
+                    y = src[i]
+                context = self.blacket(context.clone().detach(), self.blacket(x, y))
+                r = self.alpha * x + (1 - self.alpha) * context
+                return context, r
         elif mode == "5_without_context":
             self.alpha = nn.Parameter(torch.tensor(0.5))
             def lie_func(i, src, context):
@@ -356,9 +368,16 @@ def main(d_model=128, n_layers=3,
                                 print(torch.round(out.t()[j]), tgt[j])
                 writer.add_scalar("Loss/train", total_loss / len(train_loader), epoch)
                 writer.add_scalar("Accuracy/train", total_acc / len(train_loader), epoch)
+                for name, param in model.named_parameters():
+                    if name.find("alpha") != -1:
+                        writer.add_scalar(f"Param/alpha", param.item(), epoch)
+                    elif name.find("beta") != -1:
+                        writer.add_scalar(f"Param/beta", param.item(), epoch)
                 if learning_method == "GAN":
                     writer.add_scalar("Loss/discriminator", total_d_loss / len(train_loader), epoch)
                     writer.add_scalar("Loss/generator", total_g_loss / len(train_loader), epoch)
+                    for name, param in discriminator.named_parameters():
+                        writer.add_histogram(f'Grad/{name}', param.grad, epoch)
             # eval
             model.eval()
             loss = 0
