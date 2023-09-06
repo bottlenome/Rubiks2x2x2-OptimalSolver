@@ -230,8 +230,24 @@ class GPTNumNet(nn.Module):
         out = out.view(n_seq, -1)
         return out[:-1]
 
+
+class StateDiscriminator(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(24, 64)
+        self.fc2 = nn.Linear(64, 32)
+        self.fc3 = nn.Linear(32, 1)
+
+    def forward(self, x):
+        x = x / 84. # normalize
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = torch.sigmoid(self.fc3(x))
+        return x
+
+
 def main(d_model=128, n_layers=3,
-         data_type="num",
+         data_type="num", learning_method="default", discriminator_lr=0.00005,
          n_interval=1000, n_epochs=100000, n_data=512000, batch_size=512,
          model="lie", lie_mode="base", debug_print=False):
     if data_type == "num":
@@ -244,10 +260,19 @@ def main(d_model=128, n_layers=3,
             raise NotImplementedError("GPT is not implemented for state")
         else:
             model = CubeLieStateNet(d_model=d_model, n_layers=n_layers, mode=lie_mode)
+        if learning_method == "GAN":
+            discriminator = StateDiscriminator()
+            discriminator = discriminator.cuda()
+        elif learning_method == "default":
+            pass
+        else:
+            raise NotImplementedError(f"learning method {learning_method} is not implemented")
     if data_type == "num":
         optimizer = torch.optim.AdamW(model.parameters(), lr=0.0001)
     else:
         optimizer = torch.optim.AdamW(model.parameters(), lr=0.0001)
+        if learning_method == "GAN":
+            optimizer_d = torch.optim.AdamW(discriminator.parameters(), lr=0.00005)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.1)
     if data_type == "num":
         train_loader, test_loader = data_loader.NumLoader(train_rate=0.9, batch_size=batch_size, size=n_data)
@@ -259,6 +284,8 @@ def main(d_model=128, n_layers=3,
         loss_fn = torch.nn.MSELoss()
     else:
         loss_fn = torch.nn.CrossEntropyLoss(ignore_index=0)
+        if learning_method == "GAN":
+            loss_fn_d = torch.nn.BCELoss()
 
     if is_colab():
         from tqdm.notebook import tqdm
@@ -281,6 +308,8 @@ def main(d_model=128, n_layers=3,
                       leave=False) as pbar_batch:
                 total_loss = 0
                 total_acc = 0
+                total_g_loss = 0
+                total_d_loss = 0
                 for i, (src, tgt) in pbar_batch:
                     optimizer.zero_grad()
                     src = src.cuda()
@@ -292,11 +321,32 @@ def main(d_model=128, n_layers=3,
                         loss = loss_fn(out.t(), tgt.type(torch.float))
                         total_acc += (torch.round(out.t()) == tgt).sum().item() / (out.t().shape[0] * out.t().shape[1])
                     else:
+                        if learning_method == "GAN":
+                            optimizer_d.zero_grad()
+                            real_data = src.permute(1, 0, 2).view(-1, 24)
+                            fake_data = out.view(-1, 24, 7).argmax(dim=-1)
+                            real_label = torch.ones(real_data.shape[0], 1).cuda()
+                            fake_label = torch.zeros(fake_data.shape[0], 1).cuda()
+                            real_pred = discriminator(real_data)
+                            fake_pred = discriminator(fake_data.detach())
+                            d_loss = 0.5 * (loss_fn_d(real_pred, real_label) + loss_fn_d(fake_pred, fake_label))
+
+                            real_label = torch.ones(fake_data.shape[0], 1).cuda()
+                            g_pred = discriminator(fake_data)
+                            g_loss = loss_fn_d(g_pred, real_label)
+
                         out = out.permute(1, 0, 2, 3)
                         out = out.reshape(-1, out.size(-1))
                         tgt = tgt.view(-1)
                         loss = loss_fn(out, tgt)
                         total_acc += (torch.argmax(out, dim=-1) == tgt).float().mean().item()
+
+                    if learning_method == "GAN":
+                        d_loss.backward()
+                        optimizer_d.step()
+                        loss += g_loss
+                        total_d_loss += d_loss.item()
+                        total_g_loss += g_loss.item()
                     loss.backward()
                     optimizer.step()
                     total_loss += loss.item()
@@ -306,6 +356,9 @@ def main(d_model=128, n_layers=3,
                                 print(torch.round(out.t()[j]), tgt[j])
                 writer.add_scalar("Loss/train", total_loss / len(train_loader), epoch)
                 writer.add_scalar("Accuracy/train", total_acc / len(train_loader), epoch)
+                if learning_method == "GAN":
+                    writer.add_scalar("Loss/discriminator", total_d_loss / len(train_loader), epoch)
+                    writer.add_scalar("Loss/generator", total_g_loss / len(train_loader), epoch)
             # eval
             model.eval()
             loss = 0
@@ -354,16 +407,19 @@ if __name__ == '__main__':
     parser.add_argument("--model", type=str, default="lie")
     parser.add_argument("--d_model", type=int, default=128)
     parser.add_argument("--n_layers", type=int, default=3)
+    parser.add_argument("--data_type", type=str, default="num")
+    parser.add_argument("--learning_method", type=str, default="default")
+    parser.add_argument("--discriminator_lr", type=float, default=0.00005)
     parser.add_argument("--n_interval", type=int, default=1000)
     parser.add_argument("--n_epochs", type=int, default=100000)
     parser.add_argument("--n_data", type=int, default=512000)
     parser.add_argument("--batch_size", type=int, default=512)
     parser.add_argument("--debug_print", action="store_true")
     parser.add_argument("--lie_mode", type=str, default="base")
-    parser.add_argument("--data_type", type=str, default="num")
     args = parser.parse_args()
 
     main(d_model=args.d_model, n_layers=args.n_layers,
-         data_type=args.data_type,
+         data_type=args.data_type, learning_method=args.learning_method,
+         discriminator_lr=args.discriminator_lr, n_interval=args.n_interval,
          n_epochs=args.n_epochs, n_data=args.n_data, batch_size=args.batch_size,
          model=args.model, lie_mode=args.lie_mode, debug_print=args.debug_print)

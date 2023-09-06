@@ -91,3 +91,5 @@ events*
 
 # modelfile
 *.pth
+
+save
