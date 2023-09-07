@@ -72,9 +72,9 @@ class LieNet(nn.Module):
                 else:
                     x = src[i - 1]
                     y = src[i]
-                return context, x + blacket(x, y)
+                return context, y + blacket(x, y)
         elif mode == "2_context_forget":
-            self.alpha = nn.Parameter(torch.tensor(1.0))
+            self.alpha = nn.Parameter(torch.tensor(0.9))
             def lie_func(i, src, context):
                 if i == 0:
                     x = torch.zeros_like(src[0])
@@ -83,11 +83,11 @@ class LieNet(nn.Module):
                     x = src[i - 1]
                     y = src[i]
                 context = self.alpha * context + self.blacket(x, y)
-                r = x + context
+                r = y + context
                 return context, r
         elif mode == "3_context_forget":
-            self.alpha = nn.Parameter(torch.tensor(1.0))
-            self.beta = nn.Parameter(torch.tensor(1.0))
+            self.alpha = nn.Parameter(torch.tensor(0.9))
+            self.beta = nn.Parameter(torch.tensor(0.9))
             def lie_func(i, src, context):
                 if i == 0:
                     x = torch.zeros_like(src[0])
@@ -95,8 +95,8 @@ class LieNet(nn.Module):
                 else:
                     x = src[i - 1]
                     y = src[i]
-                context = self.alpha * context + self.beta * x + self.blacket(x, y)
-                r = x + context
+                context = self.alpha * context + self.beta * y + self.blacket(x, y)
+                r = context
                 return context, r
         elif mode == "4_blacket_rule":
             self.alpha = nn.Parameter(torch.tensor(0.5))
@@ -108,7 +108,7 @@ class LieNet(nn.Module):
                     x = src[i - 1]
                     y = src[i]
                 context = self.blacket(context.clone().detach(), self.blacket(x, y))
-                r = self.alpha * x + (1 - self.alpha) * context
+                r = self.alpha * y + (1 - self.alpha) * context
                 return context, r
         elif mode == "5_without_context":
             self.alpha = nn.Parameter(torch.tensor(0.5))
@@ -119,7 +119,7 @@ class LieNet(nn.Module):
                 else:
                     x = src[i - 1]
                     y = src[i]
-                return context, self.alpha * x + (1 - self.alpha) * blacket(x, y)
+                return context, self.alpha * y + (1 - self.alpha) * blacket(x, y)
         elif mode == "6_vector_condition":
             def lie_func(i, src, context):
                 x = src[0]
