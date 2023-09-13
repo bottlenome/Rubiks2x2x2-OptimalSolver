@@ -219,6 +219,36 @@ class CubeLieStateNet(nn.Module):
         out = F.softmax(out, dim=3)
         return out[:-1]
 
+
+class CubeGPTStateNet(nn.Module):
+    def __init__(self, d_face=24, d_color=6, d_model=128, n_head=4, n_layers=1, dropout=0.0, mode="base"):
+        super().__init__()
+        self.embed = torch.nn.Embedding(d_color + 1, d_model)
+        self.pos_encoder = PositionalEncoding(d_model, dropout)
+        self.compress = torch.nn.Linear(d_face * d_model, d_model)
+        encoder_layer = nn.TransformerEncoderLayer(d_model, nhead=n_head, dim_feedforward=d_model*4, dropout=dropout)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=n_layers, norm=None)
+        self.remap = torch.nn.Linear(d_model, d_face * (d_color + 1))
+        self.relu = nn.ReLU()
+        self.d_face = d_face
+        self.d_color = d_color
+        self.d_model = d_model
+
+    def forward(self, src: torch.Tensor) -> torch.Tensor:
+        n_seq = len(src)
+        src = self.embed(src)
+        src = self.pos_encoder(src)
+        src = src.view(-1, self.d_face * self.d_model)
+        # compress by total faces
+        src = self.relu(self.compress(src))
+        out = src.view(n_seq, - 1, self.d_model)
+        out = self.transformer_encoder(out)
+        out = self.remap(out)
+        out = out.view(n_seq, -1, self.d_face, self.d_color + 1)
+        out = F.softmax(out, dim=3)
+        return out[:-1]
+
+
 class GPTNumNet(nn.Module):
     def __init__(self, d_face=24, d_color=6, d_model=128, n_head=4, n_layers=6, dropout=0.0):
         super().__init__()
@@ -269,7 +299,7 @@ def main(d_model=128, n_layers=3,
             model = CubeLieNumNet(d_model=d_model, n_layers=n_layers, mode=lie_mode)
     else:
         if model == "GPT":
-            raise NotImplementedError("GPT is not implemented for state")
+            model = CubeGPTStateNet(d_model=d_model, n_layers=n_layers)
         else:
             model = CubeLieStateNet(d_model=d_model, n_layers=n_layers, mode=lie_mode)
         if learning_method == "GAN":
@@ -377,6 +407,9 @@ def main(d_model=128, n_layers=3,
                     writer.add_scalar("Loss/discriminator", total_d_loss / len(train_loader), epoch)
                     writer.add_scalar("Loss/generator", total_g_loss / len(train_loader), epoch)
                     for name, param in discriminator.named_parameters():
+                        writer.add_histogram(f'Grad/{name}', param.grad, epoch)
+                if epoch % 10 == 0:
+                    for name, param in model.named_parameters():
                         writer.add_histogram(f'Grad/{name}', param.grad, epoch)
             # eval
             model.eval()
