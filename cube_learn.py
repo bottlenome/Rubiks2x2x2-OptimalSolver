@@ -43,7 +43,7 @@ class PositionalEncoding(nn.Module):
         return self.dropout(x)
 
 class LieNet(nn.Module):
-    def __init__(self, d_model=128, mode="base"):
+    def __init__(self, d_model=128, mode="base", map_mode="map_first"):
         super().__init__()
         self.map = nn.Linear(d_model, d_model)
         self.relu = nn.ReLU()
@@ -136,6 +136,7 @@ class LieNet(nn.Module):
 
         self.lie_func = lie_func
         self.mode = mode
+        self.map_mode = map_mode
 
     def forward(self, src):
         if self.mode == "4_blacket_rule":
@@ -143,7 +144,8 @@ class LieNet(nn.Module):
         else:
             context = torch.zeros_like(src[0])
         ret = []
-        src = self.relu(self.map(src))
+        if self.map_mode == "map_first":
+            src = self.relu(self.map(src))
         
         for i in range(src.shape[0]):
             context, r = self.lie_func(i, src, context)
@@ -156,7 +158,11 @@ class LieNet(nn.Module):
                                    self.blacket(c, self.blacket(a, b)))
                 r += jacobi_identity
             ret.append(r.clone())
-        return torch.stack(ret)
+        if self.map_mode == "map_last":
+            ret = self.relu(self.map(torch.stack(ret)))
+        else:
+            ret = torch.stack(ret)
+        return ret
 
 
 class CubeLieNumNet(nn.Module):
@@ -190,14 +196,14 @@ class CubeLieNumNet(nn.Module):
 
 
 class CubeLieStateNet(nn.Module):
-    def __init__(self, d_face=24, d_color=6, d_model=128, n_layers=1, dropout=0.0, mode="base"):
+    def __init__(self, d_face=24, d_color=6, d_model=128, n_layers=1, dropout=0.0, mode="base", map_mode="map_first"):
         super().__init__()
         self.embed = torch.nn.Embedding(d_color + 1, d_model)
         self.pos_encoder = PositionalEncoding(d_model, dropout)
         self.compress = torch.nn.Linear(d_face * d_model, d_model)
         self.map = nn.Sequential()
         for i in range(n_layers):
-            self.map.add_module(f"lie{i}", LieNet(d_model, mode=mode))
+            self.map.add_module(f"lie{i}", LieNet(d_model, mode=mode, map_mode=map_mode))
         self.remap = torch.nn.Linear(d_model, d_face * (d_color + 1))
         self.relu = nn.ReLU()
         self.d_face = d_face
@@ -291,7 +297,7 @@ class StateDiscriminator(nn.Module):
 def main(d_model=128, n_layers=3,
          data_type="num", learning_method="default", discriminator_lr=0.00005,
          n_interval=1000, n_epochs=100000, n_data=512000, batch_size=512,
-         model="lie", lie_mode="base", debug_print=False):
+         model="lie", lie_mode="base", lie_map_mode="map_first", debug_print=False):
     if data_type == "num":
         if model == "GPT":
             model = GPTNumNet(d_model=d_model, n_layers=n_layers)
@@ -301,7 +307,7 @@ def main(d_model=128, n_layers=3,
         if model == "GPT":
             model = CubeGPTStateNet(d_model=d_model, n_layers=n_layers)
         else:
-            model = CubeLieStateNet(d_model=d_model, n_layers=n_layers, mode=lie_mode)
+            model = CubeLieStateNet(d_model=d_model, n_layers=n_layers, mode=lie_mode, map_mode=lie_map_mode)
         if learning_method == "GAN":
             discriminator = StateDiscriminator()
             discriminator = discriminator.cuda()
@@ -410,7 +416,8 @@ def main(d_model=128, n_layers=3,
                         writer.add_histogram(f'Grad/{name}', param.grad, epoch)
                 if epoch % 10 == 0:
                     for name, param in model.named_parameters():
-                        writer.add_histogram(f'Grad/{name}', param.grad, epoch)
+                        if name.find("bias") == -1:
+                            writer.add_histogram(f'Grad/{name}', param.grad, epoch)
             # eval
             model.eval()
             loss = 0
@@ -468,10 +475,12 @@ if __name__ == '__main__':
     parser.add_argument("--batch_size", type=int, default=512)
     parser.add_argument("--debug_print", action="store_true")
     parser.add_argument("--lie_mode", type=str, default="base")
+    parser.add_argument("--lie_map_mode", type=str, default="map_first")
     args = parser.parse_args()
 
     main(d_model=args.d_model, n_layers=args.n_layers,
          data_type=args.data_type, learning_method=args.learning_method,
          discriminator_lr=args.discriminator_lr, n_interval=args.n_interval,
          n_epochs=args.n_epochs, n_data=args.n_data, batch_size=args.batch_size,
-         model=args.model, lie_mode=args.lie_mode, debug_print=args.debug_print)
+         model=args.model, lie_mode=args.lie_mode, lie_map_mode=args.lie_map_mode, 
+         debug_print=args.debug_print)
