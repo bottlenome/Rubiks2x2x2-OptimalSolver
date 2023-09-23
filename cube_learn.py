@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import data_loader
 import math
+import random
 import sys
 from datetime import datetime, timedelta
 
@@ -41,6 +42,52 @@ class PositionalEncoding(nn.Module):
     def forward(self, x):
         x = x + self.pe[:x.size(0)]
         return self.dropout(x)
+
+class BracketNet(nn.Module):
+    def __init__(self, d_model=128, mode="probabilistic", map_mode="map_first", rate=0.3):
+        super().__init__()
+        self.bracket_product = nn.Linear(d_model*2, d_model)
+        self.relu = nn.ReLU()
+
+        def bracket(a, b):
+            return self.relu(self.bracket_product(torch.cat([a, b], dim = 1)))
+        self.bracket = bracket
+        self.target_function = nn.Sequential(nn.Linear(d_model, d_model * 2),
+                                             nn.ReLU(),
+                                             nn.Linear(d_model * 2, d_model))
+        self.layer_norm = nn.LayerNorm(d_model)
+        self.mode = mode
+        self.rate = rate
+
+    def forward(self, src):
+        ret = []
+        conditions_results = {0:0, 1:0, 2:0}
+        for i in range(src.shape[0]):
+            r = self.relu(self.target_function(src[i])) + src[i]
+            r = self.layer_norm(r)
+            context = r
+            # add condition by probabilistic
+            if self.train() and random.random() < self.rate:
+                # choose 0-2
+                target = random.randint(0, 2)
+                if i <= target:
+                    if target == 0:
+                        condition = self.bracket(src[i], src[i]) * 0.1
+                    elif target == 1:
+                        condition = (context - src[i]) * 0.1
+                    elif target == 2:
+                        a = src[i - 2]
+                        b = src[i - 1]
+                        c = src[i]
+                        condition = (self.bracket(a, self.bracket(b, c)) +
+                                     self.bracket(b, self.bracket(c, a)) +
+                                     self.bracket(c, self.bracket(a, b))) * 0.1
+                    r = r + condition
+                    conditions_results[target] += condition.norm(dim=-1).sum() / (src.shape[0] * src.shape[1])
+            ret.append(r.clone())
+        ret = torch.stack(ret)
+        return ret, conditions_results
+
 
 class LieNet(nn.Module):
     def __init__(self, d_model=128, mode="base", map_mode="map_first"):
@@ -146,13 +193,13 @@ class LieNet(nn.Module):
         ret = []
         if self.map_mode == "map_first":
             src = self.relu(self.map(src))
-        
+
         for i in range(src.shape[0]):
             context, r = self.lie_func(i, src, context)
-            if i == src.shape[0] - 2:
-                a = src[0]
-                b = src[1]
-                c = src[2]
+            if i >= 2:
+                a = src[i - 2]
+                b = src[i - 1]
+                c = src[i]
                 jacobi_identity = (self.blacket(a, self.blacket(b, c)) +
                                    self.blacket(b, self.blacket(c, a)) +
                                    self.blacket(c, self.blacket(a, b)))
@@ -199,7 +246,7 @@ class CubeLieStateNet(nn.Module):
     def __init__(self, d_face=24, d_color=6, d_model=128, n_layers=1, dropout=0.0, mode="base", map_mode="map_first"):
         super().__init__()
         self.embed = torch.nn.Embedding(d_color + 1, d_model)
-        self.pos_encoder = PositionalEncoding(d_model, dropout)
+        self.pos_encoder = PositionalEncoding(d_model)
         self.compress = torch.nn.Linear(d_face * d_model, d_model)
         self.map = nn.Sequential()
         for i in range(n_layers):
@@ -224,6 +271,93 @@ class CubeLieStateNet(nn.Module):
         out = out.view(n_seq, -1, self.d_face, self.d_color + 1)
         out = F.softmax(out, dim=3)
         return out[:-1]
+
+
+class Map(nn.Module):
+    def __init__(self, d_in, d_out, n_layers=2):
+        super().__init__()
+        self.map = nn.Sequential()
+        for i in range(n_layers):
+            if i == 0:
+                self.map.add_module(f"map_pre{i}", torch.nn.Linear(d_in, d_out))
+            else:
+                self.map.add_module(f"map_pre{i}", torch.nn.Linear(d_out, int(d_out / 2)))
+                self.map.add_module(f"map_after{i}", torch.nn.Linear(int(d_out / 2), d_out))
+        self.relu = nn.ReLU()
+        self.layer_norm = nn.Sequential()
+        for i in range(n_layers):
+            self.layer_norm.add_module(f"layer_norm{i}", nn.LayerNorm(d_out))
+        self.n_layers = n_layers
+
+    def forward(self, src):
+        for i in range(self.n_layers):
+            if i == 0:
+                src = self.relu(self.map[0](src))
+            else:
+                out = self.relu(self.map[2*i - 1](src))
+                out = self.relu(self.map[2*i](out))
+                src = out + src
+            src = self.layer_norm[i](src)
+        return src
+
+
+class ReMap(nn.Module):
+    def __init__(self, d_in, d_out, n_layers=2, dropout=0.0):
+        super().__init__()
+        self.remap = nn.Sequential()
+        for i in range(n_layers):
+            if i != n_layers - 1:
+                self.remap.add_module(f"remap_pre{i}", torch.nn.Linear(d_in, d_in * 2))
+                self.remap.add_module(f"remap_after{i}", torch.nn.Linear(d_in * 2, d_in))
+            else:
+                self.remap.add_module(f"remap_pre{i}", torch.nn.Linear(d_in, d_out))
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(dropout)
+        self.layer_norm = nn.Sequential()
+        for i in range(n_layers - 1):
+            self.layer_norm.add_module(f"layer_norm{i}", nn.LayerNorm(d_in))
+        self.n_layers = n_layers
+
+    def forward(self, src):
+        for i in range(self.n_layers):
+            if i != self.n_layers - 1:
+                src = self.dropout(src)
+                out = self.relu(self.remap[2*i](src))
+                out = self.dropout(out)
+                out = self.relu(self.remap[2*i + 1](out))
+                src = out + src
+                src = self.layer_norm[i](src)
+            else:
+                src = self.dropout(src)
+                out = self.remap[2*i](src)
+        return out
+
+class CubeBracketStateNet(nn.Module):
+    def __init__(self, d_face=24, d_color=6, d_model=128, n_layers=2, dropout=0.0, mode="probabilistic"):
+        super().__init__()
+        self.embed = torch.nn.Embedding(d_color + 1, d_model)
+        self.pos_encoder = PositionalEncoding(d_model, 0.0)
+        self.map = Map(d_face*d_model, d_model, n_layers=n_layers)
+        self.calc = BracketNet(d_model)
+        self.remap = ReMap(d_model, d_face * (d_color + 1), n_layers=n_layers, dropout=dropout)
+        self.relu = nn.ReLU()
+        self.d_face = d_face
+        self.d_color = d_color
+        self.d_model = d_model
+
+    def forward(self, src: torch.Tensor) -> torch.Tensor:
+        n_seq = len(src)
+        src = self.embed(src)
+        src = self.pos_encoder(src)
+        src = src.view(-1, self.d_face * self.d_model)
+        # compress by total faces
+        src = self.map(src)
+        out = src.view(n_seq, -1, self.d_model)
+        out, conditions_results = self.calc(out)
+        out = self.remap(out)
+        out = out.view(n_seq, -1, self.d_face, self.d_color + 1)
+        out = F.softmax(out, dim=3)
+        return out[:-1], conditions_results
 
 
 class CubeGPTStateNet(nn.Module):
@@ -296,16 +430,19 @@ class StateDiscriminator(nn.Module):
 
 def main(d_model=128, n_layers=3,
          data_type="num", learning_method="default", discriminator_lr=0.00005,
+         dropout=0.0,
          n_interval=1000, n_epochs=100000, n_data=512000, batch_size=512,
-         model="lie", lie_mode="base", lie_map_mode="map_first", debug_print=False):
+         model_name="lie", lie_mode="base", lie_map_mode="map_first", debug_print=False):
     if data_type == "num":
-        if model == "GPT":
+        if model_name == "GPT":
             model = GPTNumNet(d_model=d_model, n_layers=n_layers)
         else:
             model = CubeLieNumNet(d_model=d_model, n_layers=n_layers, mode=lie_mode)
     else:
-        if model == "GPT":
+        if model_name == "GPT":
             model = CubeGPTStateNet(d_model=d_model, n_layers=n_layers)
+        if model_name == "bracket":
+            model = CubeBracketStateNet(d_model=d_model, n_layers=n_layers, dropout=dropout)
         else:
             model = CubeLieStateNet(d_model=d_model, n_layers=n_layers, mode=lie_mode, map_mode=lie_map_mode)
         if learning_method == "GAN":
@@ -358,13 +495,19 @@ def main(d_model=128, n_layers=3,
                 total_acc = 0
                 total_g_loss = 0
                 total_d_loss = 0
+                conditions_results = {0:0, 1:0, 2:0}
                 for i, (src, tgt) in pbar_batch:
                     optimizer.zero_grad()
                     src = src.cuda()
                     # batch, seq, face -> seq, batch, face
                     src = src.permute(1, 0, 2)
                     tgt = tgt.cuda()
-                    out = model(src)
+                    if model_name == "bracket":
+                        out, cr = model(src)
+                        for i in range(3):
+                            conditions_results[i] += cr[i]
+                    else:
+                        out = model(src)
                     if data_type == "num":
                         loss = loss_fn(out.t(), tgt.type(torch.float))
                         total_acc += (torch.round(out.t()) == tgt).sum().item() / (out.t().shape[0] * out.t().shape[1])
@@ -404,6 +547,10 @@ def main(d_model=128, n_layers=3,
                                 print(torch.round(out.t()[j]), tgt[j])
                 writer.add_scalar("Loss/train", total_loss / len(train_loader), epoch)
                 writer.add_scalar("Accuracy/train", total_acc / len(train_loader), epoch)
+                if model_name == "bracket":
+                    writer.add_scalar("Condition/0", conditions_results[0] / len(train_loader), epoch)
+                    writer.add_scalar("Condition/1", conditions_results[1] / len(train_loader), epoch)
+                    writer.add_scalar("Condition/2", conditions_results[1] / len(train_loader), epoch)
                 for name, param in model.named_parameters():
                     if name.find("alpha") != -1:
                         writer.add_scalar(f"Param/alpha", param.item(), epoch)
@@ -413,10 +560,11 @@ def main(d_model=128, n_layers=3,
                     writer.add_scalar("Loss/discriminator", total_d_loss / len(train_loader), epoch)
                     writer.add_scalar("Loss/generator", total_g_loss / len(train_loader), epoch)
                     for name, param in discriminator.named_parameters():
-                        writer.add_histogram(f'Grad/{name}', param.grad, epoch)
+                        if param.grad is not None:
+                            writer.add_histogram(f'Grad/{name}', param.grad, epoch)
                 if epoch % 10 == 0:
                     for name, param in model.named_parameters():
-                        if name.find("bias") == -1:
+                        if name.find("bias") == -1 and param.grad is not None:
                             writer.add_histogram(f'Grad/{name}', param.grad, epoch)
             # eval
             model.eval()
@@ -430,7 +578,10 @@ def main(d_model=128, n_layers=3,
                     src = src.cuda()
                     src = src.permute(1, 0, 2)
                     tgt = tgt.cuda()
-                    out = model(src)
+                    if model_name == "bracket":
+                        out, _ = model(src)
+                    else:
+                        out = model(src)
                     if data_type == "num":
                         loss += loss_fn(out.t(), tgt.type(torch.float))
                         accu += (torch.round(out.t()) == tgt).sum().item() / (out.t().shape[0] * out.t().shape[1])
@@ -469,6 +620,7 @@ if __name__ == '__main__':
     parser.add_argument("--data_type", type=str, default="num")
     parser.add_argument("--learning_method", type=str, default="default")
     parser.add_argument("--discriminator_lr", type=float, default=0.00005)
+    parser.add_argument("--dropout", type=float, default=0.0)
     parser.add_argument("--n_interval", type=int, default=1000)
     parser.add_argument("--n_epochs", type=int, default=100000)
     parser.add_argument("--n_data", type=int, default=512000)
@@ -480,7 +632,8 @@ if __name__ == '__main__':
 
     main(d_model=args.d_model, n_layers=args.n_layers,
          data_type=args.data_type, learning_method=args.learning_method,
-         discriminator_lr=args.discriminator_lr, n_interval=args.n_interval,
+         discriminator_lr=args.discriminator_lr, dropout=args.dropout,
+         n_interval=args.n_interval,
          n_epochs=args.n_epochs, n_data=args.n_data, batch_size=args.batch_size,
-         model=args.model, lie_mode=args.lie_mode, lie_map_mode=args.lie_map_mode, 
+         model_name=args.model, lie_mode=args.lie_mode, lie_map_mode=args.lie_map_mode,
          debug_print=args.debug_print)
