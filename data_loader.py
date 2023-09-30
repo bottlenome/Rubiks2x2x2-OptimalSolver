@@ -57,6 +57,28 @@ def char2move(char):
         raise ValueError("Invalid move char: {}".format(char))
 
 
+def char2move_int(char):
+    if char == "U1":
+        return 1
+    elif char == "U2":
+        return 2
+    elif char == "U3":
+        return 3
+    elif char == "R1":
+        return 4
+    elif char == "R2":
+        return 5
+    elif char == "R3":
+        return 6
+    elif char == "F1":
+        return 7
+    elif char == "F2":
+        return 8
+    elif char == "F3":
+        return 9
+    else:
+        raise ValueError("Invalid move char: {}".format(char))
+
 
 def NOPLoader(train_rate=0.9, batch_size=32, size=None):
     def collate_fn(batch):
@@ -224,13 +246,49 @@ def StateLoader2(train_rate=0.9, batch_size=32, size=None):
     return train_dataloader, test_dataloader
 
 
+def get_moves(batch):
+    MOVE = 1
+    moves_batch = []
+    for item in batch:
+        moves = []
+        move = item[MOVE]
+        for i in range(0, len(move), 2):
+            moves.append(char2move_int(move[i:i+2]))
+        moves_batch.append(torch.tensor(moves))
+    moves_batch = pad_sequence(moves_batch, batch_first=True, padding_value=0)
+    return torch.tensor(moves_batch)
+
+
+def AllLoader(train_rate=0.9, batch_size=32, size=None):
+    data = R222ShortestAll(size=size)
+    def collate_fn(batch):
+        moves = get_moves(batch)
+        start_state, solve_states = make_state_and_solve_state(batch)
+        inputs = solve_states[:]
+        inputs[:, 0] = start_state
+        targets = solve_states[:, 1:]
+        return inputs, [targets, moves]
+
+    train_dataloader = IterableWrapper(data[1:int(len(data)*train_rate)])
+    train_dataloader = train_dataloader.batch(batch_size=batch_size, drop_last=True)
+    train_dataloader = train_dataloader.collate(collate_fn=collate_fn)
+    train_dataloader = train_dataloader.in_memory_cache(size=500000)
+    train_dataloader = train_dataloader.shuffle(buffer_size=500000)
+
+    test_dataloader = IterableWrapper(data[int(len(data)*train_rate):])
+    test_dataloader = test_dataloader.batch(batch_size=batch_size, drop_last=True)
+    test_dataloader = test_dataloader.collate(collate_fn=collate_fn)
+    test_dataloader = test_dataloader.in_memory_cache(size=100000)
+    return train_dataloader, test_dataloader
+
+
 if __name__ == '__main__':
     data = R222ShortestAll()
     print("data size", len(data))
-    """
     data = R222ShortestAll(size=100000)
     print("data size", len(data))
-    print("example data[0]", data[0])
+    print("example data[1]", data[1])
+    """
     train_dataloader = DataLoader(data[:3000000], batch_size=4, shuffle=True)
     for i in train_dataloader:
         print("batch_size", len(i))
@@ -278,7 +336,6 @@ if __name__ == '__main__':
             print("tgt[0]", i[1][0])
             j += 1
     print(get_solved_state())
-    """
 
     print("StateLoader2")
     train_dataloader, test_dataloader = StateLoader2(batch_size=10, size=5000)
@@ -288,4 +345,17 @@ if __name__ == '__main__':
         print("tgt.shape", i[1].shape)
         print("src[0]", i[0][0])
         print("tgt[0]", i[1][0])
+        break
+    """
+
+    print("AllLoader")
+    train_dataloader, test_dataloader = AllLoader(batch_size=10, size=5000)
+    for i in train_dataloader:
+        print("src, tgt", len(i))
+        print("src.shape", i[0].shape)
+        print("tgt[0].shape", i[1][0].shape)
+        print("tgt[1].shape", i[1][1].shape)
+        print("src[0]", i[0][0])
+        print("tgt[0][0]", i[1][0][0])
+        print("tgt[1][0]", i[1][1][0])
         break
