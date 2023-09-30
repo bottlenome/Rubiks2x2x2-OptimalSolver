@@ -8,7 +8,7 @@ import sys
 from datetime import datetime, timedelta
 
 class IntervalCheckPoint():
-    def __init__(self, interval_min=10):
+    def __init__(self, interval_min=60):
         self.interval = interval_min
         self.pre = None
 
@@ -47,13 +47,13 @@ class BracketNet(nn.Module):
     def __init__(self, d_model=128, mode="probabilistic", map_mode="map_first", rate=0.3):
         super().__init__()
         self.bracket_product = nn.Linear(d_model*2, d_model)
-        self.relu = nn.ReLU()
+        self.activate = nn.GELU()
 
         def bracket(a, b):
-            return self.relu(self.bracket_product(torch.cat([a, b], dim = 1)))
+            return self.activate(self.bracket_product(torch.cat([a, b], dim = 1)))
         self.bracket = bracket
         self.target_function = nn.Sequential(nn.Linear(d_model, d_model * 2),
-                                             nn.ReLU(),
+                                             nn.GELU(),
                                              nn.Linear(d_model * 2, d_model))
         self.layer_norm = nn.LayerNorm(d_model)
         self.mode = mode
@@ -63,7 +63,7 @@ class BracketNet(nn.Module):
         ret = []
         conditions_results = {0:0, 1:0, 2:0}
         for i in range(src.shape[0]):
-            r = self.relu(self.target_function(src[i])) + src[i]
+            r = self.activate(self.target_function(src[i])) + src[i]
             r = self.layer_norm(r)
             context = r
             # add condition by probabilistic
@@ -93,11 +93,11 @@ class LieNet(nn.Module):
     def __init__(self, d_model=128, mode="base", map_mode="map_first"):
         super().__init__()
         self.map = nn.Linear(d_model, d_model)
-        self.relu = nn.ReLU()
+        self.activate = nn.GELU()
         self.blacket_product = nn.Linear(d_model*2, d_model)
 
         def blacket(a, b):
-            return self.relu(self.blacket_product(torch.cat([a, b], dim = 1)))
+            return self.activate(self.blacket_product(torch.cat([a, b], dim = 1)))
 
         self.blacket = blacket
 
@@ -192,7 +192,7 @@ class LieNet(nn.Module):
             context = torch.zeros_like(src[0])
         ret = []
         if self.map_mode == "map_first":
-            src = self.relu(self.map(src))
+            src = self.activate(self.map(src))
 
         for i in range(src.shape[0]):
             context, r = self.lie_func(i, src, context)
@@ -206,7 +206,7 @@ class LieNet(nn.Module):
                 r += jacobi_identity
             ret.append(r.clone())
         if self.map_mode == "map_last":
-            ret = self.relu(self.map(torch.stack(ret)))
+            ret = self.activate(self.map(torch.stack(ret)))
         else:
             ret = torch.stack(ret)
         return ret
@@ -222,7 +222,7 @@ class CubeLieNumNet(nn.Module):
         for i in range(n_layers):
             self.map.add_module(f"lie{i}", LieNet(d_model, mode=mode))
         self.calc_num = torch.nn.Linear(d_model, 1)
-        self.relu = nn.ReLU()
+        self.activate = nn.GELU()
         self.d_face = d_face
         self.d_color = d_color
         self.d_model = d_model
@@ -233,7 +233,7 @@ class CubeLieNumNet(nn.Module):
         src = self.pos_encoder(src)
         src = src.view(-1, self.d_face * self.d_model)
         # compress by total faces
-        src = self.relu(self.compress(src))
+        src = self.activate(self.compress(src))
         out = src.view(n_seq, - 1, self.d_model)
         for i in range(len(self.map)):
             out = self.map[i](out)
@@ -252,7 +252,7 @@ class CubeLieStateNet(nn.Module):
         for i in range(n_layers):
             self.map.add_module(f"lie{i}", LieNet(d_model, mode=mode, map_mode=map_mode))
         self.remap = torch.nn.Linear(d_model, d_face * (d_color + 1))
-        self.relu = nn.ReLU()
+        self.activate = nn.GELU()
         self.d_face = d_face
         self.d_color = d_color
         self.d_model = d_model
@@ -263,7 +263,7 @@ class CubeLieStateNet(nn.Module):
         src = self.pos_encoder(src)
         src = src.view(-1, self.d_face * self.d_model)
         # compress by total faces
-        src = self.relu(self.compress(src))
+        src = self.activate(self.compress(src))
         out = src.view(n_seq, - 1, self.d_model)
         for i in range(len(self.map)):
             out = self.map[i](out)
@@ -283,7 +283,7 @@ class Map(nn.Module):
             else:
                 self.map.add_module(f"map_pre{i}", torch.nn.Linear(d_out, int(d_out / 2)))
                 self.map.add_module(f"map_after{i}", torch.nn.Linear(int(d_out / 2), d_out))
-        self.relu = nn.ReLU()
+        self.activate = nn.GELU()
         self.layer_norm = nn.Sequential()
         for i in range(n_layers):
             self.layer_norm.add_module(f"layer_norm{i}", nn.LayerNorm(d_out))
@@ -292,10 +292,10 @@ class Map(nn.Module):
     def forward(self, src):
         for i in range(self.n_layers):
             if i == 0:
-                src = self.relu(self.map[0](src))
+                src = self.activate(self.map[0](src))
             else:
-                out = self.relu(self.map[2*i - 1](src))
-                out = self.relu(self.map[2*i](out))
+                out = self.activate(self.map[2*i - 1](src))
+                out = self.activate(self.map[2*i](out))
                 src = out + src
             src = self.layer_norm[i](src)
         return src
@@ -311,7 +311,7 @@ class ReMap(nn.Module):
                 self.remap.add_module(f"remap_after{i}", torch.nn.Linear(d_in * 2, d_in))
             else:
                 self.remap.add_module(f"remap_pre{i}", torch.nn.Linear(d_in, d_out))
-        self.relu = nn.ReLU()
+        self.activate = nn.GELU()
         self.dropout = nn.Dropout(dropout)
         self.layer_norm = nn.Sequential()
         for i in range(n_layers - 1):
@@ -322,9 +322,9 @@ class ReMap(nn.Module):
         for i in range(self.n_layers):
             if i != self.n_layers - 1:
                 src = self.dropout(src)
-                out = self.relu(self.remap[2*i](src))
+                out = self.activate(self.remap[2*i](src))
                 out = self.dropout(out)
-                out = self.relu(self.remap[2*i + 1](out))
+                out = self.activate(self.remap[2*i + 1](out))
                 src = out + src
                 src = self.layer_norm[i](src)
             else:
@@ -340,7 +340,7 @@ class CubeBracketStateNet(nn.Module):
         self.map = Map(d_face*d_model, d_model, n_layers=n_layers)
         self.calc = BracketNet(d_model)
         self.remap = ReMap(d_model, d_face * (d_color + 1), n_layers=n_layers, dropout=dropout)
-        self.relu = nn.ReLU()
+        self.activate = nn.GELU()
         self.d_face = d_face
         self.d_color = d_color
         self.d_model = d_model
@@ -369,7 +369,7 @@ class CubeGPTStateNet(nn.Module):
         encoder_layer = nn.TransformerEncoderLayer(d_model, nhead=n_head, dim_feedforward=d_model*4, dropout=dropout)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=n_layers, norm=None)
         self.remap = torch.nn.Linear(d_model, d_face * (d_color + 1))
-        self.relu = nn.ReLU()
+        self.activate = nn.GELU()
         self.d_face = d_face
         self.d_color = d_color
         self.d_model = d_model
@@ -380,7 +380,7 @@ class CubeGPTStateNet(nn.Module):
         src = self.pos_encoder(src)
         src = src.view(-1, self.d_face * self.d_model)
         # compress by total faces
-        src = self.relu(self.compress(src))
+        src = self.activate(self.compress(src))
         out = src.view(n_seq, - 1, self.d_model)
         out = self.transformer_encoder(out)
         out = self.remap(out)
@@ -419,11 +419,12 @@ class StateDiscriminator(nn.Module):
         self.fc1 = nn.Linear(24, 64)
         self.fc2 = nn.Linear(64, 32)
         self.fc3 = nn.Linear(32, 1)
+        self.activate = nn.GELU()
 
     def forward(self, x):
         x = x / 84. # normalize
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
+        x = self.activate(self.fc1(x))
+        x = self.activate(self.fc2(x))
         x = torch.sigmoid(self.fc3(x))
         return x
 
