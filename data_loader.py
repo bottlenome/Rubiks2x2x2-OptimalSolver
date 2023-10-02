@@ -256,7 +256,7 @@ def get_moves(batch):
             moves.append(char2move_int(move[i:i+2]))
         moves_batch.append(torch.tensor(moves))
     moves_batch = pad_sequence(moves_batch, batch_first=True, padding_value=0)
-    return torch.tensor(moves_batch)
+    return moves_batch
 
 
 def AllLoader(train_rate=0.9, batch_size=32, size=None):

@@ -89,6 +89,56 @@ class BracketNet(nn.Module):
         return ret, conditions_results
 
 
+class BracketMultitaskNet(nn.Module):
+    def __init__(self, d_model=128, mode="probabilistic", map_mode="map_first", rate=0.3):
+        super().__init__()
+        self.bracket_product = nn.Linear(d_model*2, d_model)
+        self.activate = nn.GELU()
+
+        def bracket(a, b):
+            return self.activate(self.bracket_product(torch.cat([a, b], dim = 1)))
+        self.bracket = bracket
+        self.target_function = nn.Sequential(nn.Linear(d_model, d_model * 2),
+                                             nn.GELU(),
+                                             nn.Linear(d_model * 2, d_model))
+        self.layer_norm = nn.LayerNorm(d_model)
+        self.mode = mode
+        self.rate = rate
+
+    def forward(self, src):
+        ret = []
+        diffs = []
+        conditions_results = {0:0, 1:0, 2:0}
+        for i in range(src.shape[0]):
+            r = self.activate(self.target_function(src[i])) + src[i]
+            r = self.layer_norm(r)
+            context = r
+            if i >= 1:
+                diff = self.bracket(src[i - 1], src[i])
+                diffs.append(diff)
+            # add condition by probabilistic
+            if self.train() and random.random() < self.rate:
+                # choose 0-2
+                target = random.randint(0, 2)
+                if i <= target:
+                    if target == 0:
+                        condition = self.bracket(src[i], src[i]) * 0.1
+                    elif target == 1:
+                        condition = (context - src[i]) * 0.1
+                    elif target == 2:
+                        a = src[i - 2]
+                        b = src[i - 1]
+                        c = src[i]
+                        condition = (self.bracket(a, self.bracket(b, c)) +
+                                     self.bracket(b, self.bracket(c, a)) +
+                                     self.bracket(c, self.bracket(a, b))) * 0.1
+                    r = r + condition
+                    conditions_results[target] += condition.norm(dim=-1).sum() / (src.shape[0] * src.shape[1])
+            ret.append(r.clone())
+        ret = torch.stack(ret)
+        diffs = torch.stack(diffs)
+        return ret, diffs, conditions_results
+
 class LieNet(nn.Module):
     def __init__(self, d_model=128, mode="base", map_mode="map_first"):
         super().__init__()
@@ -360,6 +410,38 @@ class CubeBracketStateNet(nn.Module):
         return out[:-1], conditions_results
 
 
+class CubeBracketMultitaskNet(nn.Module):
+    def __init__(self, d_face=24, d_color=6, d_op=9 , d_model=128, n_layers=2, dropout=0.0, mode="probabilistic"):
+        super().__init__()
+        self.embed = torch.nn.Embedding(d_color + 1, d_model)
+        self.pos_encoder = PositionalEncoding(d_model, 0.0)
+        self.map = Map(d_face*d_model, d_model, n_layers=n_layers)
+        self.calc = BracketMultitaskNet(d_model)
+        self.remap = ReMap(d_model, d_face * (d_color + 1), n_layers=n_layers, dropout=dropout)
+        self.op_classify = ReMap(d_model, d_op + 1, n_layers=n_layers, dropout=dropout)
+        self.activate = nn.GELU()
+        self.d_face = d_face
+        self.d_color = d_color
+        self.d_model = d_model
+
+    def forward(self, src: torch.Tensor) -> torch.Tensor:
+        n_seq = len(src)
+        src = self.embed(src)
+        src = self.pos_encoder(src)
+        src = src.view(-1, self.d_face * self.d_model)
+        # compress by total faces
+        src = self.map(src)
+        out = src.view(n_seq, -1, self.d_model)
+        out, ops, conditions_results = self.calc(out)
+        out = self.remap(out)
+        out = out.view(n_seq, -1, self.d_face, self.d_color + 1)
+        out = F.softmax(out, dim=3)
+        # [seq, batch, d_model]
+        ops = self.op_classify(ops)
+        ops = F.softmax(ops, dim=2)
+        return out[:-1], ops, conditions_results
+
+
 class CubeGPTStateNet(nn.Module):
     def __init__(self, d_face=24, d_color=6, d_model=128, n_head=4, n_layers=1, dropout=0.0, mode="base"):
         super().__init__()
@@ -439,10 +521,19 @@ def main(d_model=128, n_layers=3,
             model = GPTNumNet(d_model=d_model, n_layers=n_layers)
         else:
             model = CubeLieNumNet(d_model=d_model, n_layers=n_layers, mode=lie_mode)
+    elif data_type == "multitask":
+        if model_name == "bracket":
+            model = CubeBracketMultitaskNet(d_model=d_model, n_layers=n_layers, dropout=dropout)
+        else:
+            raise NotImplementedError(f"model {model_name} is not implemented")
+        if learning_method == "default":
+            pass
+        else:
+            raise NotImplementedError(f"learning method {learning_method} is not implemented")
     else:
         if model_name == "GPT":
             model = CubeGPTStateNet(d_model=d_model, n_layers=n_layers)
-        if model_name == "bracket":
+        elif model_name == "bracket":
             model = CubeBracketStateNet(d_model=d_model, n_layers=n_layers, dropout=dropout)
         else:
             model = CubeLieStateNet(d_model=d_model, n_layers=n_layers, mode=lie_mode, map_mode=lie_map_mode)
@@ -462,12 +553,17 @@ def main(d_model=128, n_layers=3,
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.1)
     if data_type == "num":
         train_loader, test_loader = data_loader.NumLoader(train_rate=0.9, batch_size=batch_size, size=n_data)
+    if data_type == "multitask":
+        train_loader, test_loader = data_loader.AllLoader(train_rate=0.9, batch_size=batch_size, size=n_data)
     else:
         train_loader, test_loader = data_loader.StateLoader2(train_rate=0.9, batch_size=batch_size, size=n_data)
 
     model = model.cuda()
     if data_type == "num":
         loss_fn = torch.nn.MSELoss()
+    elif data_type == "multitask":
+        loss_fn = torch.nn.CrossEntropyLoss(ignore_index=0)
+        loss_fn_op = torch.nn.CrossEntropyLoss(ignore_index=0)
     else:
         loss_fn = torch.nn.CrossEntropyLoss(ignore_index=0)
         if learning_method == "GAN":
@@ -496,14 +592,23 @@ def main(d_model=128, n_layers=3,
                 total_acc = 0
                 total_g_loss = 0
                 total_d_loss = 0
+                ops_acc = 0
                 conditions_results = {0:0, 1:0, 2:0}
                 for i, (src, tgt) in pbar_batch:
                     optimizer.zero_grad()
                     src = src.cuda()
                     # batch, seq, face -> seq, batch, face
                     src = src.permute(1, 0, 2)
+                    if data_type == "multitask":
+                        ops_result = tgt[1]
+                        ops_result = ops_result.cuda()
+                        tgt = tgt[0]
                     tgt = tgt.cuda()
-                    if model_name == "bracket":
+                    if data_type == "multitask":
+                        out, ops, cr = model(src)
+                        for i in range(3):
+                            conditions_results[i] += cr[i]
+                    elif model_name == "bracket":
                         out, cr = model(src)
                         for i in range(3):
                             conditions_results[i] += cr[i]
@@ -512,6 +617,18 @@ def main(d_model=128, n_layers=3,
                     if data_type == "num":
                         loss = loss_fn(out.t(), tgt.type(torch.float))
                         total_acc += (torch.round(out.t()) == tgt).sum().item() / (out.t().shape[0] * out.t().shape[1])
+                    if data_type == "multitask":
+                        out = out.permute(1, 0, 2, 3)
+                        out = out.reshape(-1, out.size(-1))
+                        tgt = tgt.view(-1)
+                        loss = loss_fn(out, tgt)
+                        total_acc += (torch.argmax(out, dim=-1) == tgt).float().mean().item()
+                        ops = ops.permute(1, 0, 2)
+                        ops = ops.reshape(-1, ops.size(-1))
+                        ops_result = ops_result.view(-1)
+                        loss_op = loss_fn_op(ops, ops_result)
+                        loss += loss_op
+                        ops_acc += (torch.argmax(ops, dim=-1) == ops_result).float().mean().item()
                     else:
                         if learning_method == "GAN":
                             optimizer_d.zero_grad()
@@ -552,6 +669,8 @@ def main(d_model=128, n_layers=3,
                     writer.add_scalar("Condition/0", conditions_results[0] / len(train_loader), epoch)
                     writer.add_scalar("Condition/1", conditions_results[1] / len(train_loader), epoch)
                     writer.add_scalar("Condition/2", conditions_results[1] / len(train_loader), epoch)
+                if data_type == "multitask":
+                    writer.add_scalar("Accuracy/ops", ops_acc / len(train_loader), epoch)
                 for name, param in model.named_parameters():
                     if name.find("alpha") != -1:
                         writer.add_scalar(f"Param/alpha", param.item(), epoch)
@@ -578,8 +697,12 @@ def main(d_model=128, n_layers=3,
                 for i, (src, tgt) in test_pbar:
                     src = src.cuda()
                     src = src.permute(1, 0, 2)
+                    if data_type == "multitask":
+                        tgt = tgt[0]
                     tgt = tgt.cuda()
-                    if model_name == "bracket":
+                    if data_type == "multitask":
+                        out, _, _ = model(src)
+                    elif model_name == "bracket":
                         out, _ = model(src)
                     else:
                         out = model(src)
