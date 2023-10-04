@@ -349,13 +349,19 @@ if __name__ == '__main__':
     """
 
     print("AllLoader")
-    train_dataloader, test_dataloader = AllLoader(batch_size=10, size=5000)
-    for i in train_dataloader:
-        print("src, tgt", len(i))
-        print("src.shape", i[0].shape)
-        print("tgt[0].shape", i[1][0].shape)
-        print("tgt[1].shape", i[1][1].shape)
-        print("src[0]", i[0][0])
-        print("tgt[0][0]", i[1][0][0])
-        print("tgt[1][0]", i[1][1][0])
-        break
+    train_dataloader, test_dataloader = AllLoader(batch_size=10, size=500000)
+    zero_rate = 0.
+    TGT = 1
+    MOVES = 1
+    for index, i in enumerate(train_dataloader):
+        zero_rate += (i[:][TGT][MOVES] == 0).sum().item() / (i[TGT][MOVES].size(0) * i[TGT][MOVES].size(1))
+        if index == 0:
+            print("src, tgt", len(i))
+            print("src.shape", i[0].shape)
+            print("tgt[0].shape", i[TGT][0].shape)
+            print("tgt[1].shape", i[TGT][MOVES].shape)
+            print("src[0]", i[0][0])
+            print("tgt[0][0]", i[TGT][0][0])
+            print("tgt[1][0]", i[TGT][MOVES][0])
+            print("zero_rate", zero_rate)
+    print("zero_rate", zero_rate / len(train_dataloader))
