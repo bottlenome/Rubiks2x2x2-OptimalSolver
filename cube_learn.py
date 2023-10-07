@@ -44,26 +44,39 @@ class PositionalEncoding(nn.Module):
         return self.dropout(x)
 
 class BracketNet(nn.Module):
-    def __init__(self, d_model=128, mode="probabilistic", map_mode="map_first", rate=0.3):
+    def __init__(self, d_model=128, mode="probabilistic", map_mode="map_first", rate=0.3, n_head=4):
         super().__init__()
         self.bracket_product = nn.Linear(d_model*2, d_model)
         self.activate = nn.GELU()
 
+        assert(d_model % n_head == 0)
+        dim = int(d_model / n_head)
+
         def bracket(a, b):
             return self.activate(self.bracket_product(torch.cat([a, b], dim = 1)))
         self.bracket = bracket
-        self.target_function = nn.Sequential(nn.Linear(d_model, d_model * 2),
-                                             nn.GELU(),
-                                             nn.Linear(d_model * 2, d_model))
+        self.target_functions = nn.ModuleList()
+        for i in range(n_head):
+            self.target_functions.append(nn.Sequential(nn.Linear(dim, dim * 2),
+                                                       nn.GELU(),
+                                                       nn.Linear(dim * 2, dim)))
         self.layer_norm = nn.LayerNorm(d_model)
         self.mode = mode
         self.rate = rate
+        self.d_model = d_model
+        self.n_head = n_head
+        self.dim = dim
 
     def forward(self, src):
         ret = []
         conditions_results = {0:0, 1:0, 2:0}
         for i in range(src.shape[0]):
-            r = self.activate(self.target_function(src[i])) + src[i]
+            # batch, d_model to batch, n_head, dim
+            srcs = src[i].view(-1, self.n_head, self.dim)
+            r = torch.zeros_like(srcs).cuda()
+            for j in range(self.n_head):
+                r[:, j] = self.activate(self.target_functions[j](srcs[:, j])) + srcs[:, j]
+            r = r.view(-1, self.d_model)
             r = self.layer_norm(r)
             context = r
             # add condition by probabilistic
@@ -90,27 +103,39 @@ class BracketNet(nn.Module):
 
 
 class BracketMultitaskNet(nn.Module):
-    def __init__(self, d_model=128, mode="probabilistic", map_mode="map_first", rate=0.3):
+    def __init__(self, d_model=128, mode="probabilistic", map_mode="map_first", rate=0.3, n_head=4):
         super().__init__()
         self.bracket_product = nn.Linear(d_model*2, d_model)
         self.activate = nn.GELU()
 
+        assert(d_model % n_head == 0)
+        dim = int(d_model / n_head)
+
         def bracket(a, b):
             return self.activate(self.bracket_product(torch.cat([a, b], dim = 1)))
         self.bracket = bracket
-        self.target_function = nn.Sequential(nn.Linear(d_model, d_model * 2),
-                                             nn.GELU(),
-                                             nn.Linear(d_model * 2, d_model))
+        self.target_functions = nn.ModuleList()
+        for i in range(n_head):
+            self.target_functions.append(nn.Sequential(nn.Linear(dim, dim * 2),
+                                                       nn.GELU(),
+                                                       nn.Linear(dim * 2, dim)))
         self.layer_norm = nn.LayerNorm(d_model)
         self.mode = mode
         self.rate = rate
+        self.d_model = d_model
+        self.n_head = n_head
+        self.dim = dim
 
     def forward(self, src):
         ret = []
         diffs = []
         conditions_results = {0:0, 1:0, 2:0}
         for i in range(src.shape[0]):
-            r = self.activate(self.target_function(src[i])) + src[i]
+            srcs = src[i].view(-1, self.n_head, self.dim)
+            r = torch.zeros_like(srcs).cuda()
+            for j in range(self.n_head):
+                r[:, j] = self.activate(self.target_functions[j](srcs[:, j])) + srcs[:, j]
+            r = r.view(-1, self.d_model)
             r = self.layer_norm(r)
             context = r
             if i >= 1:
@@ -411,12 +436,12 @@ class CubeBracketStateNet(nn.Module):
 
 
 class CubeBracketMultitaskNet(nn.Module):
-    def __init__(self, d_face=24, d_color=6, d_op=9 , d_model=128, n_layers=2, dropout=0.0, mode="probabilistic"):
+    def __init__(self, d_face=24, d_color=6, d_op=9 , d_model=128, n_layers=2, n_head=4, dropout=0.0, mode="probabilistic"):
         super().__init__()
         self.embed = torch.nn.Embedding(d_color + 1, d_model)
         self.pos_encoder = PositionalEncoding(d_model, 0.0)
         self.map = Map(d_face*d_model, d_model, n_layers=n_layers)
-        self.calc = BracketMultitaskNet(d_model)
+        self.calc = BracketMultitaskNet(d_model, n_head=n_head)
         self.remap = ReMap(d_model, d_face * (d_color + 1), n_layers=n_layers, dropout=dropout)
         self.op_classify = ReMap(d_model, d_op + 1, n_layers=n_layers, dropout=dropout)
         self.activate = nn.GELU()
@@ -510,8 +535,25 @@ class StateDiscriminator(nn.Module):
         x = torch.sigmoid(self.fc3(x))
         return x
 
+def entropy_regularization(p, lambda_):
+    # pのサイズは [batch, seq, face, face_color]
+    # face_colorに対してエントロピーを計算
+    entropy = -torch.sum(p * torch.log(p + 1e-9), dim=-1)
+    # 平均エントロピー
+    mean_entropy = torch.mean(entropy)
+    return lambda_ * mean_entropy
 
-def main(d_model=128, n_layers=3,
+def kl_divergence(p, lambda_, d_color=6):
+    q = torch.ones_like(p) / d_color  # 一様分布
+    kl_div = F.kl_div(torch.log(p + 1e-9), q, reduction='batchmean')
+    return lambda_ * kl_div
+
+def total_variation(p, lambda_):
+    tv = torch.sum(torch.abs(p[..., :-1] - p[..., 1:]), dim=-1)
+    mean_tv = torch.mean(tv)
+    return lambda_ * mean_tv
+
+def main(d_model=128, n_layers=3, n_head=4,
          data_type="num", learning_method="default", discriminator_lr=0.00005,
          dropout=0.0,
          n_interval=1000, n_epochs=100000, n_data=512000, batch_size=512,
@@ -523,7 +565,7 @@ def main(d_model=128, n_layers=3,
             model = CubeLieNumNet(d_model=d_model, n_layers=n_layers, mode=lie_mode)
     elif data_type == "multitask":
         if model_name == "bracket":
-            model = CubeBracketMultitaskNet(d_model=d_model, n_layers=n_layers, dropout=dropout)
+            model = CubeBracketMultitaskNet(d_model=d_model, n_layers=n_layers, n_head=n_head, dropout=dropout)
         else:
             raise NotImplementedError(f"model {model_name} is not implemented")
         if learning_method == "default":
@@ -629,6 +671,7 @@ def main(d_model=128, n_layers=3,
                         loss_op = loss_fn_op(ops, ops_result)
                         loss += loss_op
                         ops_acc += (torch.argmax(ops, dim=-1) == ops_result).float().mean().item()
+                        loss += kl_divergence(out, 0.1)
                     else:
                         if learning_method == "GAN":
                             optimizer_d.zero_grad()
@@ -741,6 +784,7 @@ if __name__ == '__main__':
     parser.add_argument("--model", type=str, default="lie")
     parser.add_argument("--d_model", type=int, default=128)
     parser.add_argument("--n_layers", type=int, default=3)
+    parser.add_argument("--n_head", type=int, default=4)
     parser.add_argument("--data_type", type=str, default="num")
     parser.add_argument("--learning_method", type=str, default="default")
     parser.add_argument("--discriminator_lr", type=float, default=0.00005)
@@ -754,7 +798,7 @@ if __name__ == '__main__':
     parser.add_argument("--lie_map_mode", type=str, default="map_first")
     args = parser.parse_args()
 
-    main(d_model=args.d_model, n_layers=args.n_layers,
+    main(d_model=args.d_model, n_layers=args.n_layers, n_head=args.n_head,
          data_type=args.data_type, learning_method=args.learning_method,
          discriminator_lr=args.discriminator_lr, dropout=args.dropout,
          n_interval=args.n_interval,
